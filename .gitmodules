@@ -1,0 +1,4 @@
+[submodule "lib/shady.c3l"]
+	path = lib/shady.c3l
+	url = https://github.com/tonis2/shady.c3.git
+	branch = main
