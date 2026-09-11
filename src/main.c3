@@ -199,8 +199,10 @@ fn void main(String[] args)
 	if (catch compiled)
 	{
 		io::eprintfn("shader error at %d:%d: %s", diagnostic.line, diagnostic.column, diagnostic.message);
+		diagnostic.free();
 		return;
 	}
+	diagnostic.free();
 	char[] spirv = compiled;
 	defer free(spirv);
 
