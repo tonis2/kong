@@ -401,9 +401,40 @@ already in place on both sides: three.c3 writes `build/shaderdef/*.shady`,
 `src/main.c3` draws the sky pass, with `--frames N --capture out.ppm` rendering
 a fixed number of frames and writing the last one as an image.
 
+- [x] **The file is the module** - the shape the port is written in from here
+      on, changed once and early rather than after 1770 lines of material code.
+
+      **The rule** (it is `gpu/pipeline.c3`'s rule, applied one level up):
+      nothing is written down twice. C3 writes only what only C3 knows - the
+      wire structs and the push block, walked from the structs the host fills -
+      and everything else a module says is in its own file: the stage interface,
+      the bindings, the spec constants, the entry points and their dispatch
+      size. `ShaderDef` is a name, a list of sources, and the push type; the
+      defs are three to ten lines each. `ShaderIo`, `ShaderStage`,
+      `ShaderResource` and `ShaderFeature` are gone, and so are their emitters.
+
+      - Sources arrive through `load_source`'s existing pair: disk first,
+        `$embed` fallback. A def names a file and nothing else - a caller no
+        longer decides where the text comes from, and a test no longer loads it.
+      - **A module can still be two halves.** shady learned declarations without
+        bodies: `fn float4 mesh_fragment(VertexOutput input);` is declared by the
+        geometry half and defined by the material half, which the generator
+        splices in ahead of it. A name with no definition is refused *where it is
+        called*, and an entry point is never a declaration.
+      - **One module, one text, sometimes two entry points' worth of it.** The
+        cut-out shadow module carries `shadow.shady`, so it inherits its
+        `vertexMain` - which is why its own vertex entry is `cutoutVertexMain`:
+        entry names are how the host tells stages apart, and two of a stage
+        cannot share one.
+      - Every walked struct lands under `// walked from src/gpu/pipeline.c3:
+        DrawRecord`, so a reader of the generated module can find the C3
+        declaration a field came from without reading the generator.
+      - Still to come, and the reason `ShaderResource` could be *deleted* rather
+        than duplicated: the host's descriptor sets are to be derived from what
+        the file declares, the way `reflect.c3` already derives them from Slang.
 - The generator shares shady's stage vocabulary: `Stage` lives in shady
-      (`shady/stage.c3`), the parser reads `@vertex` back through it, and a
-      `ShaderStage` names its kind with it. three.c3 depends on shady from here
+      (`shady/stage.c3`), the parser reads `@vertex` back through it, so the
+      spelling of a stage is one spelling. three.c3 depends on shady from here
       on, so a generated module is compiled by three.c3's own suite as well as
       kong's - the round trip is a test, not a hope.
 - [x] **sky** - `shaders/sky.shady` (the ported code) plus `sky_def` in
