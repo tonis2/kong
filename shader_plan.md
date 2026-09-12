@@ -709,9 +709,25 @@ size of what can go wrong:
       and the flag/env override. Kept in the tree after the last flip: it is the
       only way to A/B a pass without a rebuild, and the first thing to reach for
       when a driver does something unexpected.
-- [ ] **cluster** - the smallest step there is. Compute, no descriptor bindings at
+- [x] **cluster** - the smallest step there is. Compute, no descriptor bindings at
       all, and its output is a buffer: compare `cluster_counts` and
       `cluster_indices` byte for byte against the Slang build rather than pixels.
+      The switch (`src/shader/switch.c3`) and the flip are in three.c3 `4ce33f6`;
+      the comparison is `cluster_bins_the_same_bytes_through_both_compilers`,
+      which bins one 111-light frame through both compilers in one process.
+      - **The finding that justifies the whole step: the same expression indexes
+        different things in the two languages.** Slang's `m[i]` names a **row**;
+        shady's names a **column**. The ported cluster planes were built from
+        columns, so the binning was subtly transposed - and *nothing else caught
+        it*: the module compiled, validated, and passed kong's structural check
+        (a light in a cell, in exactly that cell's 24 slices) both before and
+        after. Only the byte comparison saw it: counts differed in 162 of 3456
+        cells, indices in 10,008 of 221,184, overflow 54,126 against 55,440. The
+        fix is one transpose in `shaders/cluster.shady:50` and the bytes are then
+        identical. **Consult the matrix indexing of every ported body before the
+        next flip, sky and mesh included** - a verbatim port transposes in
+        silence, and `spirv-val`, the draw and the picture all agree with a
+        transposed result.
 - [ ] **skin** - the same shape, and the same comparison: the posed vertex
       buffer, byte for byte.
 - [ ] **shadow, depth-only** - still no bindings, and a depth map is bytes.
