@@ -404,7 +404,24 @@ a fixed number of frames and writing the last one as an image.
       on the way: an entry-point parameter must be a struct, and `atan2` was
       missing from shady's builtin set (added, with a test that pins it to
       GLSL.std450's Atan2).
-- [ ] skin (compute)
+- [x] **skin (compute)** - the first compute stage: `shaders/skin.shady` plus
+      `skin_def` in `src/shader/skin.c3`, no resources at all (every buffer is
+      an address in the push block). Kong dispatches it
+      (`test/skin_test.c3`: a headless device, the generated module, one
+      dispatch, the posed vertices copied back and compared) and it found two
+      things on the way:
+      - **The engine's layout is C3's, not std430.** A generated module has to
+        be compiled with `scalar_layout: true`, and it needs Vulkan's
+        `scalarBlockLayout` feature (`spirv-val --scalar-block-layout`), or
+        `Instance`'s trailing `float4` and `SkinnedVertex`'s stride are silently
+        different from the host's.
+      - **A matrix behind a pointer is read a column at a time.** `ColMajor` and
+        `MatrixStride` are *member* decorations, so a bare `float4x4*` has
+        nowhere to carry them and a plain load read every column from the first
+        one's address: `palette[j]` posed every vertex with the same matrix.
+        shady now lowers such a load to four column loads and a construct, with
+        a test in `test/layout_test.c3`.
+
 - [ ] cluster (compute)
 - [ ] shadow (+ cut-out variant)
 - [ ] mesh
