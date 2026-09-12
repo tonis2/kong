@@ -771,28 +771,18 @@ size of what can go wrong:
         in `tools/`), independent of the port, and on the teardown's critical
         path - it must land before any `.slang` file is deleted, because
         `test/abi_test.c3` uses those declarations as the reference side.
-        **Serial and first, before either - half done, and stopped on purpose**:
-        the shady submodule flow. `kong/lib/shady.c3l` was dirty on 2026-09-12 and
-        is now **committed as `e4dbc7f`** ("Add frac, ddx/ddy, front_facing and
-        multi-parameter entry points"), its tree clean.
-        `three.c3/lib/shady.c3l` is **still dirty**, and its working tree does
-        **not** match that commit - the same five-ish files, 60 insertions and 22
-        deletions of difference - so the two copies hold overlapping but unequal
-        edits, and the fetch/checkout was stopped rather than forced. Nothing was
-        discarded: three.c3's copy still has its own edits and its pin is
-        untouched. **Reconcile first, then bump**: diff the two working trees,
-        decide the union (not kong's side by default - the difference may be an
-        edit three.c3's copy has and kong's does not), commit that in
-        `kong/lib/shady.c3l`, then fetch into and check out three.c3's copy with
-        the same guard that stopped here (`git diff FETCH_HEAD --quiet` before any
-        checkout), and only then commit three.c3's port. Committing three.c3
-        before the copies agree pins dirty submodules.
-
-        The verified comparison of the two is worth one command before deciding:
-        `git -C three.c3/lib/shady.c3l diff` against
-        `git -C kong/lib/shady.c3l show --stat e4dbc7f` - the difference is small
-        enough to read, and this is exactly the kind of state that a later agent
-        should not guess about. **Runs must be serialised**: kong is single-instance and the
+        **Done and bumped, with one trap worth keeping.** The two vendored copies
+        never actually disagreed: the edits were the same on both sides, and the
+        "difference" was a **detached HEAD** - `kong/lib/shady.c3l` had been left
+        detached by an earlier bump, so the commit (`e4dbc7f`, "Add frac, ddx/ddy,
+        front_facing and multi-parameter entry points") landed on a detached HEAD
+        while `main` still pointed at its parent. Fetching `main` from three.c3's
+        copy therefore brought the *old* tree, and the guard correctly refused to
+        check out. Fixed by fast-forwarding kong's `main` to the commit first.
+        **A bump that leaves a detached HEAD is the trap**: the next fetch brings
+        main, not the work, and everything looks like a content disagreement that
+        is not there. Check `git status -sb` in the vendored copy before believing
+        a diff, and fast-forward the branch before fetching. **Runs must be serialised**: kong is single-instance and the
         engine suite wants the three instances closed, so one agent runs tests at
         a time. And every agent's numbers get re-run by whoever accepts the work;
         a comparison is believed only after it has been perturbed until it fails.
