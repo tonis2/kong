@@ -127,9 +127,12 @@ struct DrawRecord
 	float[4][8] uv_variants;
 	float[4] emissive;
 	uint[24] texture_index;
+
+	// The tallest uniform table column, clamped against by the material half.
+	uint material_rows;
 }
 
-$assert DrawRecord::size == 384 : "DrawRecord no longer matches three.c3's";
+$assert DrawRecord::size == 392 : "DrawRecord no longer matches three.c3's";
 
 // `Light` (`gpu/pipeline.c3`), whose stride is its size. `meta.z` is the kind;
 // a directional light has `direction.w == 0` and xyz as the surface-to-light

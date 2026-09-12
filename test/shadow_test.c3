@@ -96,9 +96,12 @@ struct DrawRecord
 	float[4][8] uv_variants;
 	float[4] emissive;
 	uint[24] texture_index;
+
+	// The tallest uniform table column, clamped against by the material half.
+	uint material_rows;
 }
 
-$assert DrawRecord::size == 384 : "DrawRecord no longer matches three.c3's";
+$assert DrawRecord::size == 392 : "DrawRecord no longer matches three.c3's";
 
 // `ShadowPush` (`gpu/pipeline.c3`): the frame, the instance array, this bucket's
 // record, and the light's clip space.
