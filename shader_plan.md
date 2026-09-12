@@ -536,6 +536,13 @@ a fixed number of frames and writing the last one as an image.
         zero and the frame came out 5% dark. A mirror that matches is not the same
         as a record that is filled, and only a number read back from the frame
         tells the two apart.
+      - **The seam has a spelling now**: `@required` (shady). A function a module
+        needs and does not contain is written `fn float3 shade(Surface s)
+        @required;`, and a module that never gets the definition is refused *at
+        that line*, whether or not anything called it - which is the difference
+        between a claim about the module and a plain declaration, whose misuse
+        only shows where it is called. `mesh.shady` and `material.shady` both mark
+        their half with it, so what each file is waiting for is in the file.
       - Then the bake, lightmap and area-reference variants.
 - [ ] post
 - [~] **lighting / surface shared library → a shady source module** - started:
