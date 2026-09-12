@@ -181,6 +181,15 @@ kong).
 - [x] Mutable module-level `static`: not needed. The generator inlines
       `static const` values and passes state as values or parameters, so shady
       stays without mutable globals.
+- [x] **One type per numbering space.** `spec.c3` used to hold every SPIR-V number
+      as a `const uint` - fifteen spaces, all interchangeable, all silently
+      wrong when mixed. They are `constdef ... : uint` now (`Opcode`,
+      `GlslOp`, `StorageClass`, `Decoration`, `Capability`, `Dim`,
+      `ImageOperand`, ...), which C3 makes a distinct type: passing an extended
+      instruction where an opcode belongs, or a bare number where either does,
+      is a compile error. The casts that remain are the boundary itself - the
+      instruction word in `Module.decl`/`Function.emit`, and the operand lists
+      the typed wrappers assemble.
 
 **Done when**: the generated engine library sources (surface/lighting maths)
 parse and validate, and unit tests cover arrays, loops and operators. The unit
