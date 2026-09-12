@@ -544,7 +544,24 @@ a fixed number of frames and writing the last one as an image.
         only shows where it is called. `mesh.shady` and `material.shady` both mark
         their half with it, so what each file is waiting for is in the file.
       - Then the bake, lightmap and area-reference variants.
-- [ ] post
+- [x] **post** - `shaders/post.shady` plus `post_def` in `src/shader/post.c3`:
+      the header it pushes, the four reserved samplers, the oversized triangle
+      (three vertices from `vertex_index`, no vertex buffer), the depth
+      reconstruction, and `fn float3 post(Post p) @required;` for the body. Kong
+      draws it (`test/post_test.c3`) over four controlled inputs and checks what
+      a *body* is handed rather than that something appeared: an asymmetric
+      fixture for the uv orientation, the three samplers distinguished by colour,
+      `resolution` and `time` straight from `info`, and `p.depth` in world units -
+      a device depth of 0.5 with planes 0.1/100 reads back as the byte the
+      formula gives (0.1998), which is the reconstruction verified against
+      arithmetic done independently of the shader.
+      - The body is the one thing a post pass always gets from a script, so what
+        is ported here is the *fixed* half; the identity body stands in for a
+        chain that names no effect. The agent's uniforms (appended after
+        `planes`) and its own textures (bindings 4 up) are Phase 10.
+      - It also made the seam's shape concrete for a pass that has *no* material:
+        `Post` is filled entirely from the record and the frame, so `@required`
+        is the only thing missing.
 - [~] **lighting / surface shared library → a shady source module** - started:
       `shaders/lighting.shady` carries the punctual path, and kong draws it lit
       (`test/mesh_lighting_test.c3`: a directional light reaches only the face it
