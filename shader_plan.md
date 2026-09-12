@@ -750,6 +750,22 @@ size of what can go wrong:
         which is why each one gets perturbed before it is believed.
 - [ ] **mesh with the default material** (no script attached) - the draw path's
       pixels, and the first step where the *material* half is what changed.
+      **Wired and compared, but held on Slang: the material half is not whole
+      yet.** What landed: `ShaderPass.MESH_MATERIAL` separates a scripted
+      material from the default path - flipping the shared row would have routed
+      script bodies into a def that never reads them - and
+      `test/mesh_shader_test.c3` renders a lit, posed, uv-variant frame through
+      both compilers: **0 of 172,800 pixel bytes differ**, and perturbing
+      `standard` fails it (15,283 bytes, first at pixel 103,54). Push range 32
+      bytes, `--debug --shady mesh` clean, and the default path cannot spill.
+      Flipping `MESH` to shady one line today breaks sky/asset/bake in the suite,
+      because `material.shady` still lacks maps, shadows, occlusion, lightmap,
+      environment, debug views and vertex colours. **That list is this item.**
+      - The matrix audit for the whole family is done: there is no `m[i]` in the
+        ported mesh, material, lighting or skinning halves. The one row indexing
+        left in the family is in the **unported** shadow-view code
+        (`shaders/lighting.slang:401-405`) - check it when that is ported, since a
+        verbatim port transposes in silence.
 - [ ] **post**, then its preamble variant.
 - [ ] **The variants**: shadow cut-out (bindless table), then the lightmap/bake
       variants, then the area-reference variant - each is a whole second module
