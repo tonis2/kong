@@ -283,12 +283,28 @@ name, id, type and default, and the `OpName` is there for tooling.
 
 ## Phase 6 — Diagnostics and source map
 
-- [ ] Keep line/column; add the source line and caret span.
-- [ ] Source map so an error in an agent body reports the body's coordinates.
-- [ ] Warnings reportable on the success path too.
+- [x] `Diagnostic` carries the region name, the line and column in that
+      region's numbering, the offending source line and the caret span.
+      `render` prints heading + line + caret the way a compiler does;
+      `to_string` gives the bare `material:3:12: message` heading.
+- [x] `#line <n> "<name>"` directives, read by the lexer and recorded in a
+      `LineMap`. Every pass keeps physical positions and `compile` maps once,
+      because the map's lifetime is the compile's and not a pass's.
+- [x] A lexer fault now carries its message and position to the caller. It used
+      to arrive as an empty diagnostic: `tokenize` propagated the fault and
+      dropped the lexer that held them.
+- [x] Warnings beside the fault rather than in it:
+      `compile(..., warnings: &list)` collects them whether the compile
+      succeeded or not. First one: an unread `@spec` constant, which is a host
+      knob wired to nothing.
+- [x] `LANGUAGE.md` §1.1, README §diagnostics, and the renderer's exact shape
+      pinned in `test/diagnostic_test.c3`.
 
 **Done when**: an undefined identifier in a material body reports
-`material:3:12` in the current shape.
+`material:3:12` in the current shape. Pinned by
+`a_body_is_reported_by_its_own_line_and_name`, with the rendered block -
+heading, source line and caret - in
+`the_rendered_diagnostic_shows_the_line_and_the_caret`.
 
 ## Phase 7 — ABI single-source (three.c3 side)
 
