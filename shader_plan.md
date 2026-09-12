@@ -761,6 +761,24 @@ size of what can go wrong:
       Flipping `MESH` to shady one line today breaks sky/asset/bake in the suite,
       because `material.shady` still lacks maps, shadows, occlusion, lightmap,
       environment, debug views and vertex colours. **That list is this item.**
+      - **How to run the rest in parallel, and what must stay serial.** Two
+        streams and no more. **(1) The engine's port remainder** - debug views and
+        vertex colours, then Phase 9's lighting remainder (point/PCF shadows, LTC
+        area lights, bake) - is *one* agent, because it is one file family
+        (`material.shady`, `lighting.shady`) and two agents editing one file
+        conflict rather than progress. **(2) Phase 0's "capture the Slang
+        fixtures"** is a second agent: disjoint files (a dumper in three.c3, not
+        in `tools/`), independent of the port, and on the teardown's critical
+        path - it must land before any `.slang` file is deleted, because
+        `test/abi_test.c3` uses those declarations as the reference side.
+        **Serial and first, before either**: the shady submodule flow - the
+        vendored copies in both repos currently carry *uncommitted* shady edits,
+        so commit them in `kong/lib/shady.c3l`, fetch into both vendored copies,
+        then commit three.c3's port. Committing three.c3 first pins dirty
+        submodules. **Runs must be serialised**: kong is single-instance and the
+        engine suite wants the three instances closed, so one agent runs tests at
+        a time. And every agent's numbers get re-run by whoever accepts the work;
+        a comparison is believed only after it has been perturbed until it fails.
       - The matrix audit for the whole family is done: there is no `m[i]` in the
         ported mesh, material, lighting or skinning halves. The one row indexing
         left in the family is in the **unported** shadow-view code
