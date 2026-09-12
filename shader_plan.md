@@ -617,13 +617,15 @@ scalars per bucket, which is tens of bytes beside the table that is already bein
 written per bucket per frame, and it buys one spelling, one layout rule, and no
 macro. `Material.block` and the per-bucket table build follow it in Phase 11.
 
-- [ ] **The uniforms struct, at generate time**
-      (`shady/uniforms.c3` or beside `abi.c3`): a C3-side uniform list - name and
-      component count, the list `scene/material.c3` already keeps - becomes
-      `struct Uniforms { float tint; float4 colors[8]; uint cells; }` plus, for a
-      spilling material, the pointer field the push block carries. Emitted as a
-      *source region* so the module text and the line map treat it like any other
-      piece.
+- [x] **The uniforms struct, at generate time** - `src/shader/uniforms.c3`:
+      `MaterialUniform[]` becomes `struct Uniforms { float tint; float4 colors[8];
+      float cells; }`, one field per uniform and one field *per row* for a table
+      column, so `s.uniforms.colors[s.variant]` is what the macro used to spell
+      `colors`. An empty list emits nothing at all, because a body with no
+      uniforms has no name to resolve. Both tests compile the emitted text inside
+      a module whose push block has a `Uniforms` field and whose body reads a
+      scalar, a table column and a scalar - a field of the wrong type or shape
+      fails there rather than in a script.
 - [ ] `Surface.uniforms` and `Post.uniforms` fields, filled in `fragmentMain`
       from the record, and one test per path that a body reading a uniform sees
       what the C3 side wrote.
