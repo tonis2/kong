@@ -501,7 +501,22 @@ a fixed number of frames and writing the last one as an image.
       numbers are worth looking up rather than recalling: `SSign` is 7 and `6` is
       `FSign`, which validation caught.
 - [ ] shadow vertex-body support (a `vertex:` material body is not run here)
-- [ ] mesh
+- [x] **mesh (vertex half)** - `shaders/mesh.shady` plus `mesh_def` in
+      `src/shader/mesh.c3`, with the pose (`shaders/skinning.shady`) shared with
+      the shadow pass so a character cannot be lit in one place and shadowed in
+      another. The fragment half is *declared* by the geometry half and defined
+      by the material, which is what the injected-half path is for; for the test
+      and for kong a stub defines it. Kong draws it: `test/mesh_test.c3` renders
+      a cube into a colour attachment and checks the stub's bytes - uv at the
+      face's centre, u and v interpolating by the fraction the camera says, and
+      the instance tint on blue - so the assertion is about the vertex path and
+      not about the shader having run. Two things it settled: the uv variant
+      table's row **is the wire struct** `UvVariant` (both this port and the
+      cut-out shadow's copy had read it as a `float4`), and a pointer used as a
+      condition (`if (draw.lightmap_uvs)`) is `p != 0` in shady now, compared as
+      an address because Vulkan allows no equality on a
+      `PhysicalStorageBuffer` pointer. The normal varying is not carried by the
+      stub's four bytes, so it is not checked yet.
 - [ ] material (+ bake, lightmap, area-reference variants)
 - [ ] post
 - [ ] surface / lighting shared library → a shady source module
