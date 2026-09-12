@@ -422,7 +422,6 @@ a fixed number of frames and writing the last one as an image.
         shady now lowers such a load to four column loads and a construct, with
         a test in `test/layout_test.c3`.
 
-- [ ] cluster (compute)
 - [x] **cluster (compute)** - `shaders/cluster.shady` plus `cluster_def` in
       `src/shader/cluster.c3`: the Forward+ binning pass, whose only resource is
       its push block and whose outputs are three addresses and an atomic. Kong
@@ -440,7 +439,28 @@ a fixed number of frames and writing the last one as an image.
         opcodes, which is wrong above half the range;
       - a component write (`lo.y = ...`) was a value, not an lvalue, so it is
         now `OpCompositeInsert` - with the operand order the instruction takes.
-- [ ] shadow (+ cut-out variant)
+- [x] **shadow, both modules** - `shaders/shadow.shady` (the vertex path both
+      pipelines pose through) plus `shaders/shadow_cutout.shady` (the sampler, the
+      uv, the discard), with `shadow_def` and `shadow_cutout_def` in
+      `src/shader/shadow.c3`. A cut-out caster changes the entry points *and* the
+      descriptor set, so it is a second module rather than a spec constant - the
+      variant policy's first row - and the def hands the same vertex text to
+      both, which is what keeps the pipeline every caster shares and the one that
+      cuts posing a vertex identically.
+      Kong draws both (`test/shadow_test.c3`): a cube into a `D32` image from an
+      orthographic light, read back and checked - the covered pixels hold the
+      near face's depth, the rest hold the clear value - and the cut-out variant
+      drawn twice, once keeping every texel and once cutting all of them, through
+      a combined image sampler bound as a runtime array in the set the engine's
+      texture table uses.
+      It found that `min`, `max`, `clamp`, `abs` and `sign` lowered to the
+      *float* GLSL instruction whatever their operands: `min(uint, uint)` emitted
+      `FMin` with uint operands, which is invalid SPIR-V and which RADV turns
+      into a driver crash. `Codegen.by_sign` picks the integer form now, with
+      `test/conformance/integer_builtins.shady` validating it. The GLSL.std.450
+      numbers are worth looking up rather than recalling: `SSign` is 7 and `6` is
+      `FSign`, which validation caught.
+- [ ] shadow vertex-body support (a `vertex:` material body is not run here)
 - [ ] mesh
 - [ ] material (+ bake, lightmap, area-reference variants)
 - [ ] post
