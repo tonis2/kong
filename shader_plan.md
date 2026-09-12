@@ -583,13 +583,54 @@ on the right line.
 
 ## Phase 11 — Host integration
 
-- [ ] shady-backed `compile` returning the existing `ShaderModule` shape.
-      (three.c3 already depends on shady for `Stage` and for the generated-module
-      round trip, so this is the swap and not the introduction.)
-- [ ] Replace the Slang argument list in `src/shader/compile.c3`.
-- [ ] Pipeline cache key includes spec-constant values (the main trap: two
-      variants silently sharing one pipeline).
-- [ ] Drop `lib/slang.c3l` from `project.json` and the packaging/setup scripts.
+**One pass at a time, with both implementations in one binary.** The engine has
+exactly one compile call per pass - `render/pass.c3` (cluster, skin),
+`render/prepass.c3` (shadow), `render/chain.c3` and `render/post.c3` (post),
+`render/lightmap.c3` (the bake variants), and the draw path - so each of those is
+a flip point, and the switch (`--shady <pass>`, or an environment variable) is
+the only difference between two runs. That is what keeps the error surface
+small: a regression is attributable the moment one pass is flipped back, and no
+step has to be right about more than one pass.
+
+Nothing here is speculative about *which* steps are small. The order is by the
+size of what can go wrong:
+
+- [ ] **The adapter**, first, because every step needs it: a shady-backed
+      `compile` returning the existing `ShaderModule`, plus the reflection list
+      the pipeline builder already consumes (sets, bindings, types). three.c3
+      already depends on shady for `Stage` and for the generated-module round
+      trip, so this is the swap and not the introduction.
+- [ ] **The switch**: a per-pass table naming which implementation compiles that
+      pass, `compile_slang` renamed to `compile_shader` with the dispatch inside,
+      and the flag/env override. Kept in the tree after the last flip: it is the
+      only way to A/B a pass without a rebuild, and the first thing to reach for
+      when a driver does something unexpected.
+- [ ] **cluster** - the smallest step there is. Compute, no descriptor bindings at
+      all, and its output is a buffer: compare `cluster_counts` and
+      `cluster_indices` byte for byte against the Slang build rather than pixels.
+- [ ] **skin** - the same shape, and the same comparison: the posed vertex
+      buffer, byte for byte.
+- [ ] **shadow, depth-only** - still no bindings, and a depth map is bytes.
+- [ ] **sky** - the first pass with a resource, and so the first that exercises
+      bindings derived from what the shader declares (`sky_map`, set 0 binding
+      0). Pixels from here on, compared against the Slang build's frame.
+- [ ] **mesh with the default material** (no script attached) - the draw path's
+      pixels, and the first step where the *material* half is what changed.
+- [ ] **post**, then its preamble variant.
+- [ ] **The variants**: shadow cut-out (bindless table), then the lightmap/bake
+      variants, then the area-reference variant - each is a whole second module
+      and flips on its own.
+- [ ] **Replace the Slang argument list in `src/shader/compile.c3`**, delete
+      `assemble.c3` and the markers, and drop `lib/slang.c3l` from
+      `project.json` and the packaging/setup scripts - last, when nothing calls
+      the old path.
+- [ ] **Pipeline cache key includes spec-constant values** (the main trap: two
+      variants silently sharing one pipeline). Until then the switched passes use
+      no spec constants and the shady path keeps its own cache key.
+- [ ] **The script path is not in this list on purpose.** Materials with a
+      `shade()` body, `displace` vertex bodies and post bodies arrive with
+      Phase 10, and they flip after the built-in passes are already the default -
+      so a step that fails is either a pass or a body, never both.
 
 **Done when**: three.c3 builds and runs with no Slang dependency and the full
 test suite passes (`c3c test --trust=full`).
