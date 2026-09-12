@@ -1,7 +1,10 @@
 module kong;
 
 import std::io;
+import std::io::file;
 import std::collections::list;
+import std::core::mem::allocators;
+import std::math::matrix;
 import std::math::vector;
 
 import vk, camera, c3w, shady;
@@ -189,8 +192,139 @@ ushort[] indices = {
 	23 // left
 };
 
+// The sky's push block, byte for byte the C3 struct three.c3's generator walks
+// (`SkyPush`): the inverse view-projection, then x intensity, y rotation in
+// radians, zw unused.
+struct SkyPush
+{
+	Matrix4f inverse_view_projection;
+	float[4] params;
+}
+
+$assert SkyPush::size == 80 : "SkyPush must stay the 80 bytes the def emits";
+
+// The camera and the sky move together: both are the same matrix, the sky's
+// un-projected. One function so a camera change cannot move the cube and leave
+// the sky looking somewhere else.
+fn void update_camera(Camera* camera, Memory* uniform_buffer, SkyPush* push)
+{
+	UniformData data = camera.matrix();
+	uniform_buffer.upload(&data, uniform_buffer.size);
+
+	Matrix4f? inverted = (data.projection * data.view).inverse();
+	if (catch inverted) return;
+	push.inverse_view_projection = inverted;
+}
+
+// Copy one presented image back to the host and write it as a binary PPM.
+//
+// PPM rather than PNG because it is a header and the bytes: nothing in this
+// program has an encoder, and the point is to be able to *look* at what a
+// frame contained rather than to ship an image format.
+fn void capture_frame(
+	Device device,
+	DeviceQueue queue,
+	vk::MemoryAllocator* allocator,
+	vk::Swapchain* sc,
+	uint image,
+	String path
+)
+{
+	ImageUsageFlagBits transfer_src = IMAGE_USAGE_TRANSFER_SRC_BIT;
+	if ((sc.image_usage & transfer_src) == (ImageUsageFlagBits)0)
+	{
+		io::eprintfn("capture: the surface did not grant TRANSFER_SRC (usage %x)", sc.image_usage);
+		return;
+	}
+
+	usz pixels = (usz)WIDTH * (usz)HEIGHT;
+	vk::Memory readback = vk::new_buffer(
+		allocator,
+		usage: BUFFER_USAGE_TRANSFER_DST_BIT,
+		properties: MEMORY_PROPERTY_HOST_VISIBLE_BIT | MEMORY_PROPERTY_HOST_COHERENT_BIT,
+		data: null,
+		data_size: (sz)pixels * 4,
+	)!!;
+	defer readback.free();
+
+	device.@single_time_command(queue: queue; CommandBuffer cmd)
+	{
+		vk::ImageMemoryBarrier2 to_src = vk::transferBarrier(
+			sc.images[image],
+			IMAGE_LAYOUT_PRESENT_SRC_KHR,
+			IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+		);
+		vk::cmdPipelineBarrier2(cmd, &&vk::dependencyInfo().setImageMemoryBarriers({ to_src }));
+
+		vk::BufferImageCopy region = {
+			.imageSubresource = {
+				.aspectMask = IMAGE_ASPECT_COLOR_BIT,
+				.mipLevel = 0,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+			.imageExtent = { WIDTH, HEIGHT, 1 },
+		};
+		vk::cmdCopyImageToBuffer(
+			cmd,
+			sc.images[image],
+			IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			readback.buffer,
+			1,
+			&region
+		);
+
+		// Back where the presentation engine expects it. Leaving it in
+		// TRANSFER_SRC is an error the next acquire reports instead.
+		vk::ImageMemoryBarrier2 to_present = vk::transferBarrier(
+			sc.images[image],
+			IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			IMAGE_LAYOUT_PRESENT_SRC_KHR
+		);
+		vk::cmdPipelineBarrier2(cmd, &&vk::dependencyInfo().setImageMemoryBarriers({ to_present }));
+	}!!;
+
+	// `B8G8R8A8` is what the surface format is on this platform: the bytes are
+	// blue, green, red, alpha and a PPM wants red, green, blue.
+	String header = string::tformat("P6\n%d %d\n255\n", WIDTH, HEIGHT);
+	char[] out = alloc::new_array(mem, char, (sz)(header.len + pixels * 3));
+	mem::copy(out.ptr, header.ptr, header.len);
+
+	char* source = (char*)readback.data();
+	for (usz i = 0; i < pixels; i++)
+	{
+		out[header.len + i * 3]     = source[i * 4 + 2];
+		out[header.len + i * 3 + 1] = source[i * 4 + 1];
+		out[header.len + i * 3 + 2] = source[i * 4];
+	}
+	file::save(path, out)!!;
+	free(out);
+	io::printfn("capture: wrote %s", path);
+}
+
 fn void main(String[] args)
 {
+
+	// `--frames N` renders N frames and exits, so a run can be checked without
+	// a hand on the Escape key. The window still opens: this is a renderer
+	// test, not a headless one.
+	uint frame_limit = 0;
+	String capture_path = "";
+	for (usz i = 0; i < args.len; i++)
+	{
+		if (i + 1 >= args.len) continue;
+		if (args[i] == "--frames")
+		{
+			int? count = args[i + 1].to_int();
+			if (catch count) continue;
+			frame_limit = (uint)count;
+		}
+		else if (args[i] == "--capture")
+		{
+			capture_path = args[i + 1];
+		}
+	}
+
 	// First, before Vulkan or the window system exist. A shady compile error is
 	// a fault carrying a line and a column, so report it and leave rather than
 	// standing up a device for a pipeline that cannot be built.
@@ -304,7 +438,15 @@ fn void main(String[] args)
 
 	// --- Swapchain (with framebuffers) ---
 	vk::Swapchain sc;
-	sc.init(device, physical_device, surface, WIDTH, HEIGHT, render_pass: render_pass)!!;
+	sc.init(
+		device,
+		physical_device,
+		surface,
+		WIDTH,
+		HEIGHT,
+		render_pass: render_pass,
+		image_usage: IMAGE_USAGE_COLOR_ATTACHMENT_BIT | IMAGE_USAGE_TRANSFER_SRC_BIT
+	)!!;
 
 	// --- Command pool & buffers ---
 	CommandPool command_pool          = device.createCommandPool(queue: graphics_queue.index)!!;
@@ -541,11 +683,136 @@ fn void main(String[] args)
 		.setRenderPass(render_pass)
 		.build(device)!!;
 
+	// --- Sky: a module three.c3's ShaderDef generated ---
+	//
+	// three.c3 writes the whole shader - the declarations walked from its wire
+	// structs, the push block, the entry points, the ported body - and this is
+	// where it is compiled *and drawn*, because kong depends on shady and the
+	// engine does not. Regenerate it with:
+	//
+	//     cd ../three.c3 && c3c test --trust=full --test-filter three_tests::shader_def
+	//
+	// A missing module is not fatal: the cube is the demo, the sky is the port
+	// being checked.
+	const String SKY_MODULE = "../three.c3/build/shaderdef/sky.shady";
+
+	ShaderModule sky_module = (ShaderModule)null;
+	Pipeline sky_pipeline = (Pipeline)null;
+	PipelineLayout sky_layout = (PipelineLayout)null;
+	DescriptorSetLayout sky_set_layout = (DescriptorSetLayout)null;
+	WriteDescriptorSet sky_descriptor;
+	SkyPush sky_push = { .params = { 1.0, 0.0, 0.0, 0.0 } };
+
+	if (!file::is_file(SKY_MODULE))
+	{
+		io::printn("sky: no generated module - run three.c3's shader_def test first");
+	}
+	else
+	{
+		char[]? sky_bytes = file::load(tmem, SKY_MODULE);
+		if (catch sky_bytes)
+		{
+			io::eprintfn("sky: cannot read %s", SKY_MODULE);
+		}
+		else
+		{
+			shady::Diagnostic sky_diagnostic;
+			char[]? sky_spirv = shady::compile((String)sky_bytes, &sky_diagnostic);
+			if (catch sky_spirv)
+			{
+				io::eprintfn("sky module error at %d:%d: %s",
+					sky_diagnostic.line, sky_diagnostic.column, sky_diagnostic.message);
+			}
+			else
+			{
+				sky_module = vk::loadShaderModule(device, sky_spirv)!!;
+
+				// One combined image sampler at set 0, binding 0 - the one the
+				// def's `ShaderResource` declared, which is the only binding the
+				// module has.
+				sky_set_layout = vk::descriptorSetLayoutCreateInfo()
+					.setFlags(DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT)
+					.setBindings(
+						{
+							{
+								.binding = 0,
+								.descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+								.descriptorCount = 1,
+								.stageFlags = SHADER_STAGE_FRAGMENT_BIT
+							}
+						}
+					)
+					.build(device)!!;
+
+				PipelineShaderStageCreateInfo[2] sky_stages = {
+					vk::pipelineShaderStageCreateInfo()
+						.setStage(SHADER_STAGE_VERTEX_BIT)
+						.setMod(sky_module)
+						.setName("vertexMain"),
+					vk::pipelineShaderStageCreateInfo()
+						.setStage(SHADER_STAGE_FRAGMENT_BIT)
+						.setMod(sky_module)
+						.setName("fragmentMain")
+				};
+
+				sky_layout = vk::pipelineLayoutCreateInfo()
+					.setSetLayouts({ sky_set_layout })
+					.setPushConstantRanges(
+						{ { .stageFlags = SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = SkyPush::size } }
+					)
+					.build(device)!!;
+
+				// The oversized triangle is not wound for a face, and there is no
+				// depth attachment to test against.
+				PipelineRasterizationStateCreateInfo sky_raster = vk::defaultRasterizationState()
+					.setCullMode(CULL_MODE_NONE);
+				PipelineDepthStencilStateCreateInfo sky_depth = vk::defaultDepthStencilState()
+					.setDepthTestEnable(0)
+					.setDepthWriteEnable(0);
+
+				sky_pipeline = vk::graphicsPipelineCreateInfo()
+					.setStages(sky_stages[..])
+					.setLayout(sky_layout)
+					.setVertexInputState(&vertex_input_state)
+					.setDynamicState(&dynamic_state)
+					.setRasterizationState(&sky_raster)
+					.setInputAssemblyState(&input_assembly_state)
+					.setMultisampleState(&multisample_state)
+					.setDepthStencilState(&sky_depth)
+					.setColorBlendState(&color_blend_state)
+					.setViewportState(&viewport_state)
+					.setRenderPass(render_pass)
+					.build(device)!!;
+
+				// The checkerboard stands in for an equirectangular image: the
+				// point here is that the ported shader samples what the def said
+				// it would.
+				sky_descriptor = vk::writeDescriptorSet()
+					.setDstBinding(0)
+					.setDescriptorType(DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+					.setImageInfo(
+						{
+							{
+								.imageView = texture_view,
+								.sampler = texture_sampler,
+								.imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+							}
+						}
+					);
+
+				io::printn("sky: generated module compiled, validated by use, and drawn");
+			}
+		}
+	}
+
 	// --- Frame sync ---
 	vk::FrameSync frame_sync;
 	frame_sync.init(device, sc.image_count)!!;
 
+	update_camera(&camera, &uniform_buffer, &sky_push);
+
 	bool running = true;
+	uint frames_drawn = 0;
 	Vec2 prev_mouse;
 	while (running)
 	{
@@ -555,20 +822,20 @@ fn void main(String[] args)
 		{
 			Vec2 mouse_pos = win.getMousePos();
 			camera.rotate(mouse_pos.x - prev_mouse.x, (mouse_pos.y - prev_mouse.y));
-			uniform_buffer.upload(&&camera.matrix(), uniform_buffer.size);
+			update_camera(&camera, &uniform_buffer, &sky_push);
 			prev_mouse = mouse_pos;
 		}
 
 		if (event_map.is_pressed(MOUSE_SCROLL_UP))
 		{
 			camera.zoom(5);
-			uniform_buffer.upload(&&camera.matrix(), size: uniform_buffer.size);
+			update_camera(&camera, &uniform_buffer, &sky_push);
 		}
 
 		if (event_map.is_pressed(MOUSE_SCROLL_DOWN))
 		{
 			camera.zoom(-5);
-			uniform_buffer.upload(&&camera.matrix(), size: uniform_buffer.size);
+			update_camera(&camera, &uniform_buffer, &sky_push);
 		}
 
 		if (event_map.is_pressed(ESCAPE))
@@ -596,6 +863,30 @@ fn void main(String[] args)
 		);
 		vk::cmdSetScissor(command_buffer, 0, 1, (Rect2D[]) { { .extent = sc.extent, .offset = { .x = 0, .y = 0 } } });
 
+		if (sky_pipeline != null)
+		{
+			vk::cmdBindPipeline(command_buffer, PIPELINE_BIND_POINT_GRAPHICS, sky_pipeline);
+			vk::cmdPushDescriptorSetKHR(
+				command_buffer,
+				PIPELINE_BIND_POINT_GRAPHICS,
+				sky_layout,
+				0,
+				1,
+				&sky_descriptor
+			);
+			vk::cmdPushConstants(
+				command_buffer,
+				sky_layout,
+				SHADER_STAGE_FRAGMENT_BIT,
+				0,
+				SkyPush::size,
+				&sky_push
+			);
+			// No vertex buffer and no index buffer: three vertices made in the
+			// shader, which is the whole geometry of a sky.
+			vk::cmdDraw(command_buffer, 3, 1, 0, 0);
+		}
+
 		vk::cmdBindPipeline(command_buffer, PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 		vk::cmdPushDescriptorSetKHR(
 			command_buffer,
@@ -620,11 +911,25 @@ fn void main(String[] args)
 		vk::cmdEndRenderPass(command_buffer);
 
 		frame_sync.endFrame(graphics_queue.handle, command_buffer, sc.handle, next_image)!!;
+
+		frames_drawn++;
+		if (frame_limit > 0 && frames_drawn >= frame_limit)
+		{
+			if (capture_path.len) capture_frame(device, graphics_queue, &allocator, &sc, next_image, capture_path);
+			running = false;
+		}
 	}
 
 	// Wait until Vulkan is finished, before freeing stuff
 	device.waitIdle();
 
+	if (sky_pipeline != null)
+	{
+		sky_pipeline.free(device);
+		sky_layout.free(device);
+		sky_set_layout.free(device);
+		sky_module.free(device);
+	}
 	sc.free(device);
 	render_pass.free(device);
 	command_pool.free(device);
