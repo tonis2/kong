@@ -45,16 +45,27 @@ const float FAR = 100.0;
 // resolution holds, so a misread field cannot land on it by saturation.
 const float TIME = 0.25;
 
+// `Uniforms`, the pass's own uniform block: this build declares none, so the
+// generator emits its reserved stub - one float that keeps the struct non-empty.
+struct Uniforms
+{
+	float material_unused;
+}
+
+$assert Uniforms::size == 4 : "Uniforms no longer matches three.c3's";
+
 // `PostPush` (`src/shader/post.c3`): the header the generator walks into the
-// module's push block. The offsets are the contract - info at 0, planes at 16 -
-// so a field added or moved would put the fragment's reads off target.
+// module's push block, plus the merged `Uniforms` member. The offsets are the
+// contract - info at 0, planes at 16, uniforms at 24 - so a field added or moved
+// would put the fragment's reads off target.
 struct PostPush
 {
 	float[4] info;
 	float[2] planes;
+	Uniforms uniforms;
 }
 
-$assert PostPush::size == 24 : "PostPush no longer matches three.c3's";
+$assert PostPush::size == 28 : "PostPush no longer matches three.c3's";
 
 // Bodies kong supplies, one per value the module must hand over. Each returns
 // its own field, so the check below reads that field's bytes and nothing else.
@@ -907,7 +918,7 @@ fn void the_ported_post_hands_the_body_its_values() @test
 	};
 	vk::updateDescriptorSets(rig.f.device, 4, &writes[0], 0, null);
 
-	// The push header the pass reads is 24 bytes; the fragment stage is the one
+	// The push header the pass reads is 28 bytes; the fragment stage is the one
 	// that reads it.
 	PipelineLayout layout = vk::pipelineLayoutCreateInfo()
 		.setSetLayouts({ samplers_layout })

@@ -626,7 +626,20 @@ macro. `Material.block` and the per-bucket table build follow it in Phase 11.
       a module whose push block has a `Uniforms` field and whose body reads a
       scalar, a table column and a scalar - a field of the wrong type or shape
       fails there rather than in a script.
-- [ ] **The push-block merge, which is the entry that makes the fields work.**
+- [x] **The push-block merge** (three.c3 `23262b9`; kong mirrored after it).
+      `append_push_block` takes a trailing type, `ShaderDef` carries the emitted
+      struct as a source region above the block, `Surface.uniforms` and
+      `Post.uniforms` are filled from `push.uniforms`, and the shader suite
+      checks the order (struct before block), the member, and the fill. Kong's
+      mirrors grew to match (mesh_lit 168, post 28, both checked against the
+      generated dumps rather than against each other).
+      - **Finding worth keeping**: kong does not enable the Vulkan validation
+        layers, so a push-constant *range* that is too small for the block does
+        not fail there - the mirror change was invisible to the suite. What kong
+        guarantees is compile + `spirv-val` + draw; range/enum/state validation is
+        the engine's `--debug` path. Do not read a green kong run as "the ABI
+        agrees".
+
       The push struct is `append_push_block`'s today - walked from the C3 type -
       and the uniforms are not in that type: a material's uniforms are declared at
       runtime, so at generate time the generator appends the emitted `Uniforms`

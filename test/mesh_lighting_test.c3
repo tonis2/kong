@@ -177,16 +177,28 @@ struct FrameBlock
 
 $assert FrameBlock::size == 400 : "FrameBlock no longer matches three.c3's";
 
-// `MeshPush` (`gpu/pipeline.c3`): the frame, the instance array, and this
-// bucket's record. The whole of what a mesh draw pushes.
+// `Uniforms`, the material's declared uniform block: the generator emits it
+// from the declared list and the push block carries one. This lit build declares
+// `tint` and eight colour rows, in the order the module walks them.
+struct Uniforms
+{
+	float[4] tint;
+	float[4][8] colors;
+}
+
+$assert Uniforms::size == 144 : "Uniforms no longer matches three.c3's";
+
+// `MeshPush` (`gpu/pipeline.c3`): the frame, the instance array, this bucket's
+// record, and the material's uniforms. The whole of what a mesh draw pushes.
 struct MeshPush
 {
 	FrameBlock* frame;
 	Instance* instances;
 	DrawRecord* draw;
+	Uniforms uniforms;
 }
 
-$assert MeshPush::size == 24 : "MeshPush no longer matches three.c3's";
+$assert MeshPush::size == 168 : "MeshPush no longer matches three.c3's";
 
 // `ClusterPush` (`gpu/pipeline.c3`), as the host fills it: device addresses
 // rather than the pointers the shader sees.
