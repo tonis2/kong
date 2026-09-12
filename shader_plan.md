@@ -634,6 +634,18 @@ macro. `Material.block` and the per-bucket table build follow it in Phase 11.
       is 24 bytes and `MATERIAL_PUSH_START` is 24, which is not a coincidence to
       preserve by hand: an offset test pins them, the way `Draw.uv_transform ==
       108` is pinned.
+      - **Done already, so the merge is the only thing left**: the *variant* rides
+        the mesh stage as an integer varying (`uint variant` on `VertexOutput`,
+        filled from `instance.variant`, reaching a body as `Surface.variant`) -
+        and an integer varying is now Flat on both sides *without being asked*
+        (shady decides it, because there is no other legal spelling; `@flat` still
+        parses). The uniforms emitter emits `MATERIAL_ROWS` for every material and
+        a `Uniforms` struct that always exists, with a reserved `material_unused`
+        field when the script declared nothing, so `Surface.uniforms` can be a
+        field of the engine's own contract rather than something generated per
+        material. `Uniforms`, `material_unused` and `MATERIAL_ROWS` are in
+        `MATERIAL_RESERVED` before the switchover, because a name is reservable
+        exactly once.
       - **The no-uniforms case still gets a `Uniforms` field, with one reserved
         padding field in it.** The alternative is generating `Surface` and `Post`
         per material, and their fixed fields - albedo, normal, uv, the record's
