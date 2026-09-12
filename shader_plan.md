@@ -626,9 +626,29 @@ macro. `Material.block` and the per-bucket table build follow it in Phase 11.
       a module whose push block has a `Uniforms` field and whose body reads a
       scalar, a table column and a scalar - a field of the wrong type or shape
       fails there rather than in a script.
+- [ ] **The push-block merge, which is the entry that makes the fields work.**
+      The push struct is `append_push_block`'s today - walked from the C3 type -
+      and the uniforms are not in that type: a material's uniforms are declared at
+      runtime, so at generate time the generator appends the emitted `Uniforms`
+      field after the walked ones and emits the struct above them. The walked part
+      is 24 bytes and `MATERIAL_PUSH_START` is 24, which is not a coincidence to
+      preserve by hand: an offset test pins them, the way `Draw.uv_transform ==
+      108` is pinned.
+      - **The no-uniforms case still gets a `Uniforms` field, with one reserved
+        padding field in it.** The alternative is generating `Surface` and `Post`
+        per material, and their fixed fields - albedo, normal, uv, the record's
+        scalars - are the engine's contract rather than the script's, so the type
+        stays constant and only the uniforms vary. shady accepts an empty struct
+        and compiles it (there is a test), but an empty `OpTypeStruct` is not
+        something to bet a driver on, and a field of a type with no members is a
+        field no body could resolve against anyway. The padding field is named
+        `material_unused` and goes into `MATERIAL_RESERVED` when the merge lands,
+        for the reason that list already gives: whether a name collides must not
+        depend on how many uniforms happened to be declared beside it.
 - [ ] `Surface.uniforms` and `Post.uniforms` fields, filled in `fragmentMain`
-      from the record, and one test per path that a body reading a uniform sees
-      what the C3 side wrote.
+      from the record (`s.uniforms = push.uniforms;` for a push-resident material,
+      the table deref for a spilled one), and one test per path that a body
+      reading a uniform sees what the C3 side wrote.
 - [ ] A spilling material generates the same struct behind the pointer, and a
       kong draw shows a spilled array column reaching a body - the case the old
       macro existed for.
