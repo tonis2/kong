@@ -90,10 +90,12 @@ entry points, or change stage interfaces. They belong only in the third row.
       `.kind` (e.g. `ARRAY`, `POINTER`), `.inner` and `.size`
       (`lib/std/io/formatter_private.c3:792`, `:913`). A generator can recurse
       C3 types into shady types with no manifest.
-- [ ] **Type → shady spelling.** Write the mapping macro (C3 type → shady type
-      string): scalars, vectors, matrices, `@address` structs, and arrays by
-      recursing `.inner`. Array extent is the one detail to pin down when
-      implementing (likely `$member.type.len` / `@kindof`).
+- [x] **Type → shady spelling.** `src/shader/abi.c3`, as Phase 7 above: the
+      mapping is by `$Type::kind`, arrays recurse `$Type::inner`, and the
+      extent is `$Type::len` read into a macro variable (`$Type::len` is
+      compile-time only, so it cannot be read at the runtime use site). The
+      pointee of an address comes from the C3 pointer type, so no manifest -
+      which is what typing those fields as pointers in `ec2a867` bought.
 - [x] **Scalar layout.** Adopted: `compile(..., scalar_layout: true)` packs like
       C3 rather than std140/std430. Pinned by `test/layout_test.c3` against the
       `DrawRecord` / `MeshPush` / `SkinnedVertex` / post-push offsets. The
@@ -106,9 +108,10 @@ entry points, or change stage interfaces. They belong only in the third row.
       type. `out`/`inout` (for `displace(inout Vertex)`) is in on the same
       by-pointer mechanism, and arrays, casts, ternaries and the operator set a
       ported body needs are in too.
-- [ ] **Buffer device addresses.** Keep BDA for geometry/skinning/cluster
-      (recommended — already the model), or move to storage buffers and extend
-      shady that way instead.
+- [x] **Buffer device addresses.** Kept: BDA is the model, and three.c3's wire
+      structs now spell their addresses as real pointers (`ec2a867`). Shady's
+      pointer surface covers the streams - `float3*`, `uint4*`, `float4x4*`, and
+      pointers to wire structs.
 - [ ] **Atomics.** Implement `InterlockedAdd`, or restructure the cluster
       overflow path to avoid it.
 - [ ] **Comparison samplers.** Add a comparison sampler type, or replace the
@@ -308,15 +311,35 @@ heading, source line and caret - in
 
 ## Phase 7 — ABI single-source (three.c3 side)
 
-- [ ] A generator that walks the wire structs and emits shady struct
-      declarations in matching order.
-- [ ] Emit resources from a manifest rather than from hand-written bindings.
-- [ ] Delete the duplicated `struct Draw` / `Instance` / `FrameBlock`
-      declarations from the shader text.
-- [ ] Keep `check_push_block` as a test, not a runtime gate.
+- [x] **The wire structs carry real pointers for their device addresses.**
+      `DrawRecord.positions` is `Vec3*`, not a `ulong` holding an address: a
+      `ulong` does not say what it points at, and the shader declaration needs
+      the pointee. Layout is unchanged - every `$assert` size and offset holds -
+      and the compiler found every assignment site. three.c3 `ec2a867`.
+- [x] **`src/shader/abi.c3`** walks a struct with `$Type::members` and emits the
+      shady declaration in declaration order (`append_shady_struct`), plus the
+      whole wire format in dependency order (`append_shader_abi`). Mapping:
+      scalars keep their names; a vector, and a 2..4 array of scalars, is
+      `float4`-style; `Matrix4f` is `float4x4`; a struct keeps its own name; a
+      pointer appends `*`. An unmapped type is a `$error` at the field that
+      caused it.
+- [x] **`test/abi_test.c3` holds the emitter to the running format**: every
+      declaration is cut out of the shader that declares it today and compared
+      with comments and whitespace removed. `MeshPush`/`ShadowPush` compare
+      against their `PushData`; the only folded difference is
+      `Draw`/`DrawRecord`, which the port renames.
+- [ ] **Emit resources from a manifest** rather than from hand-written
+      bindings. Wants the `ShaderDef` of Phase 8 to carry it.
+- [ ] **Delete the duplicated `struct Draw` / `Instance` / `FrameBlock`
+      declarations from the shader text** - the moment generated source is what
+      gets compiled, which is Phase 8.
+- [ ] **Keep `check_push_block` as a test, not a runtime gate.** The runtime
+      gate exists because the declaration is written twice; there is one after
+      the deletion, which is Phase 8 too.
 
 **Done when**: one edit to a C3 wire struct flows to both sides with no manual
-shader edit.
+shader edit. The generation half is in and pinned; the deletion half waits on
+Phase 8, because nothing compiles the generated source yet.
 
 ## Phase 8 — ShaderDef generator (three.c3 side)
 
