@@ -23,14 +23,14 @@ import std::io;
 import std::io::file;
 import std::math::matrix;
 import std::math::vector;
-import vk, shady;
+import vk, shady, compute_support;
 
-const String SKIN_MODULE = "../three.c3/build/shaderdef/skin.shady";
-const uint VERTICES = 4;
-const uint INSTANCES = 3;
-const uint WORKGROUP = 64;
+const String SKIN_MODULE    = "../three.c3/build/shaderdef/skin.shady";
+const uint VERTICES         = 4;
+const uint INSTANCES        = 3;
+const uint WORKGROUP        = 64;
 const uint FLAG_HAS_NORMALS = 1;
-const uint POSE_LIVE = 0x80000000;
+const uint POSE_LIVE        = 0x80000000;
 
 // `three::SkinPush` (`src/gpu/pipeline.c3`), as the host fills it: device
 // addresses rather than the pointers the shader sees. The size is the engine's
@@ -81,118 +81,6 @@ struct SkinnedVertex
 
 $assert SkinnedVertex::size == 24 : "SkinnedVertex no longer matches three.c3's";
 
-// A headless device: no window, no surface, no swapchain - a compute pass needs
-// none of them, and the module is the only thing under test.
-struct Fixture
-{
-	vk::Instance instance;
-	PhysicalDevice pdevice;
-	Device device;
-	DeviceQueue queue;
-	vk::MemoryAllocator allocator;
-	CommandPool pool;
-	CommandBuffer cmd;
-	Fence fence;
-}
-
-fn void Fixture.free(&self)
-{
-	vk::destroyFence(self.device, self.fence, null);
-	vk::destroyCommandPool(self.device, self.pool, null);
-	self.allocator.free();
-	self.device.free();
-	self.instance.free();
-}
-
-faultdef NO_COMPUTE_QUEUE;
-
-fn Fixture? device_up()
-{
-		// `DEFAULT_EXTENSIONS` rather than an empty list: the builder indexes
-	// `extensions[0]`, which panics on zero of them.
-	vk::Instance instance = vk::createDefaultInstance(
-		{ .app_name = "skin_test", .extensions = { ...vk::DEFAULT_EXTENSIONS } }
-	)!;
-
-	PhysicalDevice pdevice = (PhysicalDevice)null;
-	uint queue_index = 0;
-	foreach (candidate : instance.getDevices()!)
-	{
-		QueuePropertiesList families = candidate.getQueueProperties()!;
-		for (sz i = 0; i < families.len(); i++)
-		{
-			if (((uint)families[i].queueFlags & (uint)vk::QueueFlagBits.QUEUE_GRAPHICS_BIT) == 0) continue;
-			pdevice = candidate;
-			queue_index = (uint)i;
-			break;
-		}
-		if (pdevice != null) break;
-	}
-	if (pdevice == null) return NO_COMPUTE_QUEUE~;
-
-	// Everything the device offers, the way the demo does it: the queried
-	// structs are handed straight back, so `bufferDeviceAddress` is on.
-	PhysicalDeviceVulkan13Features vulkan13 = { .sType = STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
-	PhysicalDeviceVulkan12Features vulkan12 = { .sType = STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-		                                        .pNext = &vulkan13 };
-	PhysicalDeviceVulkan11Features vulkan11 = { .sType = STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
-		                                        .pNext = &vulkan12 };
-	PhysicalDeviceFeatures2 features = { .sType = STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-		                                 .pNext = &vulkan11 };
-	vk::getPhysicalDeviceFeatures2(pdevice, &features);
-
-	Device device = vk::deviceCreateInfo()
-		.setQueueCreateInfos(
-			{ vk::deviceQueueCreateInfo().setQueueFamilyIndex(queue_index).setQueuePriorities({ 1.0 }) }
-		)
-		.setNext(&features)
-		.build(pdevice)!;
-
-	DeviceQueue queue = { .index = queue_index, .handle = device.getQueue(queue_index) };
-
-	vk::MemoryAllocator allocator = (vk::MemoryAllocator) {
-		.device = device,
-		.pdevice = pdevice,
-		.queue = queue,
-		.flags = MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT | MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT,
-	}.init()!;
-
-	CommandPool pool = device.createCommandPool(queue: queue_index)!;
-	CommandBufferList buffers = device.createCommandBuffers(pool, 1)!;
-	Fence fence = vk::fenceCreateInfo().build(device)!;
-
-	return (Fixture) {
-		.instance = instance,
-		.pdevice = pdevice,
-		.device = device,
-		.queue = queue,
-		.allocator = allocator,
-		.pool = pool,
-		.cmd = buffers[0],
-		.fence = fence,
-	};
-}
-
-// A buffer the shader reads through its address and the host can write and read
-// directly: one page of host-visible memory per buffer, no copies either way.
-fn Memory? upload(Fixture* f, void* data, sz size)
-{
-	return vk::new_buffer(
-		allocator: &f.allocator,
-		usage: BUFFER_USAGE_STORAGE_BUFFER_BIT | BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-		properties: MEMORY_PROPERTY_HOST_VISIBLE_BIT | MEMORY_PROPERTY_HOST_COHERENT_BIT,
-		data: data,
-		data_size: size
-	);
-}
-
-fn bool close(float a, float b) @inline
-{
-	float d = a - b;
-	if (d < 0.0) d = -d;
-	return d < 0.0001;
-}
-
 fn void the_skin_dispatch_poses_the_vertices() @test
 {
 	if (!file::is_file(SKIN_MODULE))
@@ -201,7 +89,7 @@ fn void the_skin_dispatch_poses_the_vertices() @test
 		return;
 	}
 
-	Fixture f = device_up()!!;
+	Fixture f = compute_support::device_up()!!;
 	defer f.free();
 
 	// --- The module ---
@@ -220,17 +108,14 @@ fn void the_skin_dispatch_poses_the_vertices() @test
 	ShaderModule shader = vk::loadShaderModule(f.device, spirv)!!;
 
 	PipelineLayout layout = vk::pipelineLayoutCreateInfo()
-		.setPushConstantRanges({ { .stageFlags = SHADER_STAGE_COMPUTE_BIT, .offset = 0,
-			                        .size = (uint)SkinPush::size } })
+		.setPushConstantRanges(
+			{ { .stageFlags = SHADER_STAGE_COMPUTE_BIT, .offset = 0, .size = (uint)SkinPush::size } }
+		)
 		.build(f.device)!!;
 
 	ComputePipelineCreateInfo pipeline_info = vk::computePipelineCreateInfo()
-		.setStage(
-			vk::pipelineShaderStageCreateInfo()
-				.setStage(SHADER_STAGE_COMPUTE_BIT)
-				.setMod(shader)
-				.setName("computeMain")
-		)
+		.setStage(vk::pipelineShaderStageCreateInfo().setStage(SHADER_STAGE_COMPUTE_BIT).setMod(shader)
+			.setName("computeMain"))
 		.setLayout(layout);
 	Pipeline pipeline;
 	vk::createComputePipelines(f.device, (PipelineCache)null, 1, &pipeline_info, null, &pipeline)!!;
@@ -238,22 +123,24 @@ fn void the_skin_dispatch_poses_the_vertices() @test
 	// --- The bucket ---
 	// Four vertices, one bone, full weight: the pose each instance writes is
 	// then exactly the palette matrix its `pose` field selects.
-	Vec3[VERTICES] positions = { { 0.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0 },
-		                         { 0.0, 0.0, 1.0 } };
-	Vec3[VERTICES] normals = { { 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0 },
-		                       { 0.0, 0.0, 1.0 } };
+	Vec3[VERTICES] positions = { { 0.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0 }, { 0.0, 0.0, 1.0 } };
+	Vec3[VERTICES] normals = { { 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0 } };
 	uint[4][VERTICES] joints;
-	Vec4[VERTICES] weights = { { 1.0, 0.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0, 0.0 },
-		                       { 1.0, 0.0, 0.0, 0.0 } };
+	Vec4[VERTICES] weights = {
+		{ 1.0, 0.0, 0.0, 0.0 },
+		{ 1.0, 0.0, 0.0, 0.0 },
+		{ 1.0, 0.0, 0.0, 0.0 },
+		{ 1.0, 0.0, 0.0, 0.0 }
+	};
 
 	Instance[INSTANCES] instances;
 	// Baked, its own slot. Crossfading out of slot 1, which is the `pose_from`
 	// the blend reads. And live, which is the one bit that chooses a table.
-	instances[0].pose      = 0;
-	instances[1].pose      = 0;
+	instances[0].pose = 0;
+	instances[1].pose = 0;
 	instances[1].pose_from = 1;
-	instances[1].blend     = 0.5;
-	instances[2].pose      = POSE_LIVE;
+	instances[1].blend = 0.5;
+	instances[2].pose = POSE_LIVE;
 
 	// The matrices are written as columns, the way the shader reads them: a
 	// translation lives in the fourth column, and index 0 of a column is x.
@@ -267,19 +154,19 @@ fn void the_skin_dispatch_poses_the_vertices() @test
 		{ .m = { 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 30.0, 0.0, 0.0, 1.0 } },
 	};
 
-	Memory positions_buffer = upload(&f, &positions[0], (sz)positions.len * Vec3::size)!!;
+	Memory positions_buffer = compute_support::upload(&f, &positions[0], (sz)positions.len * Vec3::size)!!;
 	defer positions_buffer.free();
-	Memory normals_buffer = upload(&f, &normals[0], (sz)normals.len * Vec3::size)!!;
+	Memory normals_buffer = compute_support::upload(&f, &normals[0], (sz)normals.len * Vec3::size)!!;
 	defer normals_buffer.free();
-	Memory joints_buffer = upload(&f, &joints[0], (sz)joints.len * uint[4]::size)!!;
+	Memory joints_buffer = compute_support::upload(&f, &joints[0], (sz)joints.len * uint[4]::size)!!;
 	defer joints_buffer.free();
-	Memory weights_buffer = upload(&f, &weights[0], (sz)weights.len * Vec4::size)!!;
+	Memory weights_buffer = compute_support::upload(&f, &weights[0], (sz)weights.len * Vec4::size)!!;
 	defer weights_buffer.free();
-	Memory instances_buffer = upload(&f, &instances[0], (sz)instances.len * Instance::size)!!;
+	Memory instances_buffer = compute_support::upload(&f, &instances[0], (sz)instances.len * Instance::size)!!;
 	defer instances_buffer.free();
-	Memory baked_buffer = upload(&f, &baked[0], (sz)baked.len * Matrix4f::size)!!;
+	Memory baked_buffer = compute_support::upload(&f, &baked[0], (sz)baked.len * Matrix4f::size)!!;
 	defer baked_buffer.free();
-	Memory live_buffer = upload(&f, &live[0], (sz)live.len * Matrix4f::size)!!;
+	Memory live_buffer = compute_support::upload(&f, &live[0], (sz)live.len * Matrix4f::size)!!;
 	defer live_buffer.free();
 
 	// The output is a full bucket's worth: three instances of four vertices, and
@@ -296,17 +183,17 @@ fn void the_skin_dispatch_poses_the_vertices() @test
 	defer output_buffer.free();
 
 	SkinPush push = {
-		.positions      = positions_buffer.get_address(),
-		.normals        = normals_buffer.get_address(),
-		.joints         = joints_buffer.get_address(),
-		.weights        = weights_buffer.get_address(),
-		.instances      = instances_buffer.get_address(),
-		.baked          = baked_buffer.get_address(),
-		.live           = live_buffer.get_address(),
-		.output         = output_buffer.get_address(),
-		.vertex_count   = VERTICES,
+		.positions = positions_buffer.get_address(),
+		.normals = normals_buffer.get_address(),
+		.joints = joints_buffer.get_address(),
+		.weights = weights_buffer.get_address(),
+		.instances = instances_buffer.get_address(),
+		.baked = baked_buffer.get_address(),
+		.live = live_buffer.get_address(),
+		.output = output_buffer.get_address(),
+		.vertex_count = VERTICES,
 		.instance_count = INSTANCES,
-		.flags          = FLAG_HAS_NORMALS,
+		.flags = FLAG_HAS_NORMALS,
 	};
 
 	// --- The dispatch ---
@@ -318,8 +205,7 @@ fn void the_skin_dispatch_poses_the_vertices() @test
 	vk::cmdDispatch(f.cmd, (threads + WORKGROUP - 1) / WORKGROUP, 1, 1);
 
 	// The shader wrote through a device address; the host reads the same bytes.
-	vk::MemoryBarrier visible = { .srcAccessMask = ACCESS_SHADER_WRITE_BIT,
-		                          .dstAccessMask = ACCESS_HOST_READ_BIT };
+	vk::MemoryBarrier visible = { .srcAccessMask = ACCESS_SHADER_WRITE_BIT, .dstAccessMask = ACCESS_HOST_READ_BIT };
 	vk::cmdPipelineBarrier(
 		f.cmd,
 		PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -341,7 +227,7 @@ fn void the_skin_dispatch_poses_the_vertices() @test
 	// --- What the dispatch wrote ---
 	SkinnedVertex* out = (SkinnedVertex*)output_buffer.data();
 
-	float[INSTANCES] want_x = { 10.0, 15.0, 30.0 };
+	float[INSTANCES] want_x        = { 10.0, 15.0, 30.0 };
 	float[INSTANCES] want_normal_x = { 0.0, 0.0, 1.0 };
 
 	for (uint i = 0; i < INSTANCES; i++)
@@ -349,36 +235,49 @@ fn void the_skin_dispatch_poses_the_vertices() @test
 		// Vertex 0 is the origin, so its pose is the matrix's translation and
 		// nothing else.
 		SkinnedVertex origin = out[i * VERTICES];
-		test::@check(close(origin.position.x, want_x[i]),
-			"instance %d puts the origin at x = %f, wanted %f", i, origin.position.x, want_x[i]);
-		test::@check(close(origin.position.y, 0.0) && close(origin.position.z, 0.0),
+		test::@check(
+			compute_support::close(origin.position.x, want_x[i]),
+			"instance %d puts the origin at x = %f, wanted %f",
+			i,
+			origin.position.x,
+			want_x[i]
+		);
+		test::@check(
+			compute_support::close(origin.position.y, 0.0) && compute_support::close(origin.position.z, 0.0),
 			"and leaves it on the y = z = 0 line, got (%f, %f, %f)",
 			origin.position.x,
 			origin.position.y,
-			origin.position.z);
+			origin.position.z
+		);
 
 		// Vertex 1 is one unit along x, which pins the rotation as well as the
 		// translation: it turns (1,0,0) into (0,0,-1) for the live instance.
 		SkinnedVertex one = out[i * VERTICES + 1];
-		float want_one_x = i == 2 ? want_x[i] : want_x[i] + 1.0;
-		float want_one_z = i == 2 ? -1.0 : 0.0;
-		test::@check(close(one.position.x, want_one_x) && close(one.position.z, want_one_z),
+		float want_one_x  = i == 2 ? want_x[i] : want_x[i] + 1.0;
+		float want_one_z  = i == 2 ? -1.0 : 0.0;
+		test::@check(
+			compute_support::close(one.position.x, want_one_x) && compute_support::close(one.position.z, want_one_z),
 			"instance %d poses vertex 1 to (%f, %f, %f), wanted (%f, 0, %f)",
 			i,
 			one.position.x,
 			one.position.y,
 			one.position.z,
 			want_one_x,
-			want_one_z);
+			want_one_z
+		);
 
-		test::@check(close(origin.normal.x, want_normal_x[i]) && close(origin.normal.y, 0.0),
+		test::@check(
+			compute_support::close(origin.normal.x, want_normal_x[i]) && compute_support::close(origin.normal.y, 0.0),
 			"instance %d leaves the normal (%f, %f, %f), wanted (%f, 0, 0)",
 			i,
 			origin.normal.x,
 			origin.normal.y,
 			origin.normal.z,
-			want_normal_x[i]);
-		test::@check(close(origin.normal.z, i == 2 ? 0.0 : 1.0),
-			"because the normal is the w = 0 multiply, not the w = 1 one");
+			want_normal_x[i]
+		);
+		test::@check(
+			compute_support::close(origin.normal.z, i == 2 ? 0.0 : 1.0),
+			"because the normal is the w = 0 multiply, not the w = 1 one"
+		);
 	}
 }

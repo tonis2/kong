@@ -423,6 +423,23 @@ a fixed number of frames and writing the last one as an image.
         a test in `test/layout_test.c3`.
 
 - [ ] cluster (compute)
+- [x] **cluster (compute)** - `shaders/cluster.shady` plus `cluster_def` in
+      `src/shader/cluster.c3`: the Forward+ binning pass, whose only resource is
+      its push block and whose outputs are three addresses and an atomic. Kong
+      dispatches it (`test/cluster_test.c3`, on the fixture skin lifted into
+      `test/compute_support.c3`) and checks the grid rather than a picture: a
+      light placed in one cell has to be in exactly the 24 slices of that cell,
+      and seventy lights in one cell have to set its overflow bit and leave the
+      atomic holding the difference.
+      It found that shady emitted invalid SPIR-V in three places, all of which
+      `spirv-val` caught and RADV turned into a driver crash:
+      - an operation mixed a `float` and a `uint` without converting either: the
+        language converts literals only (LANGUAGE.md 5.3), so the operands are
+        now checked and a mix is refused where it is written;
+      - `uint` division, remainder and comparisons went through the *signed*
+        opcodes, which is wrong above half the range;
+      - a component write (`lo.y = ...`) was a value, not an lvalue, so it is
+        now `OpCompositeInsert` - with the operand order the instruction takes.
 - [ ] shadow (+ cut-out variant)
 - [ ] mesh
 - [ ] material (+ bake, lightmap, area-reference variants)
