@@ -731,9 +731,23 @@ size of what can go wrong:
 - [ ] **skin** - the same shape, and the same comparison: the posed vertex
       buffer, byte for byte.
 - [ ] **shadow, depth-only** - still no bindings, and a depth map is bytes.
-- [ ] **sky** - the first pass with a resource, and so the first that exercises
+- [x] **sky** - the first pass with a resource, and so the first that exercises
       bindings derived from what the shader declares (`sky_map`, set 0 binding
       0). Pixels from here on, compared against the Slang build's frame.
+      three.c3 `sky_test.c3`'s `the_sky_is_the_same_pixels_through_both_compilers`
+      builds both pipelines and compares a 160x120 frame: **0 of 76,800 bytes
+      differed**, and the reflection (set 0, binding 0, count 1, combined image
+      sampler, one set, equal push size) was checked rather than assumed. No
+      adapter change was needed - the reflection already produced every field
+      pipeline creation reads. Proven able to fail by flipping the rotation's
+      sign: 35,746 bytes changed, first at byte 205 (pixel 51,0).
+      - **Two traps for every comparison after this one.** A banded fixture is
+        *blind to a Y rotation* - the sky needed a four-quadrant fixture before
+        the test could see one, the same way a diagonal pose would have been
+        blind to a transposition. And the scene cache hands back the first
+        compiler's frame, so a comparison that does not disable it compares one
+        build with itself. **Both are ways a green comparison proves nothing**,
+        which is why each one gets perturbed before it is believed.
 - [ ] **mesh with the default material** (no script attached) - the draw path's
       pixels, and the first step where the *material* half is what changed.
 - [ ] **post**, then its preamble variant.
