@@ -27,7 +27,7 @@ import shady;
 const String GENERATED_DIR = "../three.c3/build/shaderdef";
 
 // One name per shader three.c3 generates. Adding a port adds a name here.
-const String[*] GENERATED = { "sky", "skin", "cluster", "shadow", "shadow_cutout", "mesh" };
+const String[*] GENERATED = { "sky", "skin", "cluster", "shadow", "shadow_cutout", "mesh", "mesh_lit" };
 
 fn void every_generated_module_compiles() @test
 {

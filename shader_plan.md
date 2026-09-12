@@ -519,7 +519,26 @@ a fixed number of frames and writing the last one as an image.
       stub's four bytes, so it is not checked yet.
 - [ ] material (+ bake, lightmap, area-reference variants)
 - [ ] post
-- [ ] surface / lighting shared library → a shady source module
+- [~] **lighting / surface shared library → a shady source module** - started:
+      `shaders/lighting.shady` carries the punctual path, and kong draws it lit
+      (`test/mesh_lighting_test.c3`: a directional light reaches only the face it
+      faces, a point light reaches a fragment through the cluster list the culling
+      pass actually filled, and a zeroed grid shades the whole list). Both frames
+      were checked numerically, not just asserted: the lit face reads the light's
+      own hue, the turned-away face reads black rather than clear, and the point
+      light's channels come back in the ratio the light has.
+      - **Not ported yet, and each is its own piece**: shadows
+        (`shared_point_shadow_factor`, with the sun's `i == 0` special case),
+        area lights (kinds 2/3 and the LTC maths - the bulk of the original),
+        baked light (`shared_baked_diffuse` + the `LIGHT_BAKED` skip that keeps a
+        baked light from being added twice), and the ambient/environment terms
+        (`lighting.x`, `world.rgb`, `environment_light`) which live in
+        `material.slang`'s standard shading rather than in the shared block.
+      - One shape lesson worth keeping: `shade_lights` returns *unweighted* terms
+        and the material multiplies the diffuse by albedo - `albedo * diffuse *
+        (1 - metalness) + specular` - so a test material that skips the albedo
+        still looks lit and is wrong. The kong rig therefore paints a white
+        albedo, so what the pixels show is the light.
 
 **Done when**: no `.slang` file remains for the engine, and examples render
 identically.
