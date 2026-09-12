@@ -314,8 +314,8 @@ fn void SamplerArgument.free(&self, Device device)
 	self.memory.free();
 }
 
-// The release of this object that the four nested-defers dance of the test
-// cannot express: the texture is created first and destroyed last.
+// Everything the rig owns, released together. The fixture goes last: the
+// `Memory` frees above and the depth image both need the device.
 fn void Rig.free(&self)
 {
 	self.readback.free();
