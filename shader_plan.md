@@ -588,8 +588,48 @@ identically.
 
 ## Phase 10 — Agent body path
 
-- [ ] Material uniforms without `#define`: emit typed access the body can read
-      (including the spilled-table case) at generate time.
+**The uniform spelling, decided before the first line of it.** A body reads its
+uniforms today by *bare name* - `if (channel < 0.5)` in `examples/trimsheet.js`,
+resolved by a `#define` the assembler emits as `(push.channel)` or
+`(push.material_table[0].channel)`. That is the preprocessor doing overload
+resolution, and it is why a typo in a body is a compile error about a name nobody
+declared rather than about the field the author meant.
+
+Without it, the body reads them through the context it already has:
+
+    s.uniforms.tint          a material body
+    p.uniforms.channel       a post body
+
+which is typed (a typo is an unknown field, at the body's own line), needs no
+`#undef` discipline (nothing else in the template can be rewritten by a name a
+script chose), and gives the *generator* the whole of the storage decision -
+"including the spilled-table case" becomes a question about the emitted struct
+rather than about two macro spellings.
+
+**One storage per material, and that is the decision to make here.** A material
+whose scalar uniforms fit the push block reads them from it; a material that
+spills puts its *whole* uniform set in the buffer and the push block carries only
+the pointer. The alternative - scalars in the push, array columns in the buffer,
+both behind one name - is what the `#define` hides today, and it cannot be hidden
+without a preprocessor: two storages are two expressions, and the field either
+lives in the push block or it does not. Moving everything costs a memcpy of the
+scalars per bucket, which is tens of bytes beside the table that is already being
+written per bucket per frame, and it buys one spelling, one layout rule, and no
+macro. `Material.block` and the per-bucket table build follow it in Phase 11.
+
+- [ ] **The uniforms struct, at generate time**
+      (`shady/uniforms.c3` or beside `abi.c3`): a C3-side uniform list - name and
+      component count, the list `scene/material.c3` already keeps - becomes
+      `struct Uniforms { float tint; float4 colors[8]; uint cells; }` plus, for a
+      spilling material, the pointer field the push block carries. Emitted as a
+      *source region* so the module text and the line map treat it like any other
+      piece.
+- [ ] `Surface.uniforms` and `Post.uniforms` fields, filled in `fragmentMain`
+      from the record, and one test per path that a body reading a uniform sees
+      what the C3 side wrote.
+- [ ] A spilling material generates the same struct behind the pointer, and a
+      kong draw shows a spilled array column reaching a body - the case the old
+      macro existed for.
 - [ ] Vertex body (`displace`) path.
 - [ ] Post body path.
 - [ ] `#line`-equivalent source mapping for each body.
