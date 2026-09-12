@@ -77,8 +77,11 @@ struct MorphDelta
 	float[3] normal;
 }
 
-// `DrawRecord` (`gpu/pipeline.c3`): the vertex streams the vertex stage reaches
-// through pointers, and the flags that decide which of them it reads.
+// `DrawRecord` (`gpu/pipeline.c3`), mirrored field for field: the vertex streams
+// the vertex stage reaches through pointers, the flags that decide which of them
+// it reads, and the material this dump's stub fragment does not read but the lit
+// path's does. The generated module's copy is walked from the C3 struct in
+// declaration order, so a field skipped or moved reads some other field's bytes.
 struct DrawRecord
 {
 	float[3]* positions;
@@ -116,19 +119,34 @@ struct MeshPush
 
 $assert MeshPush::size == 24 : "MeshPush no longer matches three.c3's";
 
-const uint FRAME_BLOCK_SIZE = 512;
-
-// `FrameBlock` (`gpu/pipeline.c3`): the mesh path reads its first field, this
-// frame's view-projection, and no other field on the path this rig takes - no
-// pose, no morph, no light, no cluster. The tail keeps the stride at the real
-// block's 512 bytes, which is the offset contract the shader reads through.
+// `FrameBlock` (`gpu/pipeline.c3`), mirrored field for field like every other wire
+// struct here: the generated module's copy is walked from the C3 struct in
+// declaration order, and the stride is the contract. This rig fills only
+// `view_projection`; every field stays in its place so that offset cannot move.
 struct FrameBlock
 {
 	Matrix4f view_projection;
-	char[FRAME_BLOCK_SIZE - 64] tail;
+	float[4] lighting;
+	Matrix4f* live_poses;
+	Matrix4f light_view_projection;
+	float[4] shadow;
+	float[4] debug;
+	float[4] camera;
+	float[4] environment;
+	void* lights;
+	float* morph_weights;
+	float[4] world;
+	float[4] point_shadow;
+	Matrix4f inverse_view_projection;
+	float[4] ambient_occlusion;
+	void* shadow_views;
+	uint* cluster_counts;
+	uint* cluster_indices;
+	uint[4] cluster_grid;
+	float[4] cluster_screen;
 }
 
-$assert FrameBlock::size == FRAME_BLOCK_SIZE : "FrameBlock no longer matches three.c3's";
+$assert FrameBlock::size == 400 : "FrameBlock no longer matches three.c3's";
 
 const uint CUBE_VERTICES = 36;
 
@@ -442,13 +460,19 @@ fn void? rig_up(Rig* rig)
 	instances[0].color = { 1.0, TINT_G, 0.75, 1.0 };
 	rig.instances = compute_support::upload(&rig.f, &instances[0], Instance::size)!;
 
-	DrawRecord[1] draws;
-	draws[0].positions  = (float[3]*)rig.positions.get_address();
-	draws[0].uvs        = (float[2]*)rig.uvs.get_address();
-	draws[0].colors     = (float[4]*)rig.colors.get_address();
-	draws[0].base_color = { 1.0, 1.0, 1.0, 1.0 };
-	draws[0].flags      = HAS_UVS | HAS_COLORS;
-	draws[0].uv_transform = { 1.0, 1.0, 0.0, 0.0 };
+	// Zero-filled first: the material fields this stub does not read - emissive,
+	// the uv variant table, the texture indices - are a material declaring none
+	// rather than bytes the vertex stage would still read.
+	DrawRecord[1] draws = {};
+	draws[0].positions     = (float[3]*)rig.positions.get_address();
+	draws[0].uvs           = (float[2]*)rig.uvs.get_address();
+	draws[0].colors        = (float[4]*)rig.colors.get_address();
+	draws[0].base_color    = { 1.0, 1.0, 1.0, 1.0 };
+	draws[0].flags         = HAS_UVS | HAS_COLORS;
+	draws[0].uv_transform  = { 1.0, 1.0, 0.0, 0.0 };
+	// The material half is filled with the values the lit path shades, so the
+	// record this test shares with it is whole where even the stub never asks.
+	draws[0].surface       = { 0.5, 0.0, 0.5, 0.0 };
 	// The morph loop's whole test: zero targets and zero weights mean every
 	// null pointer below it stays unread.
 	draws[0].morph_targets = 0;

@@ -517,7 +517,26 @@ a fixed number of frames and writing the last one as an image.
       an address because Vulkan allows no equality on a
       `PhysicalStorageBuffer` pointer. The normal varying is not carried by the
       stub's four bytes, so it is not checked yet.
-- [ ] material (+ bake, lightmap, area-reference variants)
+- [~] **material** - started: `shaders/material.shady` carries the record's
+      material fields as a `Surface`, the built-in look (`standard`), and the
+      fragment that builds one from the varyings and hands it to the body. **The
+      seam is now a declaration**: the geometry half declares `mesh_fragment`, the
+      material half defines it, the material half declares `shade` and the body -
+      the default is `return standard(s);` - defines that. A body is text spliced
+      between the two, which is exactly what a script's `shade()` is, so nothing
+      about the half needs to change when the script path arrives.
+      - Not ported yet, each one line in the original that reads something this
+        half does not have: **maps** (`SLOT_BASE_COLOR`, `map_at`,
+        `texture_index`) and with them the **alpha test**; **shadows**;
+        **occlusion and crevice**; **baked light** and the lightmap;
+        **environment** reflection; the **debug views** and **relief**.
+      - Rig lesson, and it cost two subagent runs to see: kong's mirrors were
+        faithful all along, but the **records themselves were never given their
+        material values** - `surface` stayed zero, so the specular term's `f0` was
+        zero and the frame came out 5% dark. A mirror that matches is not the same
+        as a record that is filled, and only a number read back from the frame
+        tells the two apart.
+      - Then the bake, lightmap and area-reference variants.
 - [ ] post
 - [~] **lighting / surface shared library → a shady source module** - started:
       `shaders/lighting.shady` carries the punctual path, and kong draws it lit

@@ -100,8 +100,11 @@ struct MorphDelta
 	float[3] normal;
 }
 
-// `DrawRecord` (`gpu/pipeline.c3`): the vertex streams the vertex stage reaches
-// through pointers, and the flags that decide which of them it reads.
+// `DrawRecord` (`gpu/pipeline.c3`), mirrored field for field: the vertex streams
+// the vertex stage reaches through pointers, the flags that decide which of them
+// it reads, and the material the fragment half shades. The generated module's
+// copy is walked from the C3 struct in declaration order, so a field skipped or
+// moved reads some other field's bytes.
 struct DrawRecord
 {
 	float[3]* positions;
@@ -509,13 +512,20 @@ fn void? rig_up(Rig* rig)
 	instances[0].color = { 1.0, 1.0, 1.0, 1.0 };
 	rig.instances = compute_support::upload(&rig.f, &instances[0], Instance::size)!;
 
-	DrawRecord[1] draws;
+	// Zero-filled first: the material fields this test does not choose -
+	// emissive, the uv variant table, the texture indices - are a material
+	// declaring none rather than bytes the fragment would still read.
+	DrawRecord[1] draws = {};
 	draws[0].positions     = (float[3]*)rig.positions.get_address();
 	draws[0].normals       = (float[3]*)rig.normals.get_address();
 	draws[0].colors        = (float[4]*)rig.colors.get_address();
 	draws[0].base_color    = { 1.0, 1.0, 1.0, 1.0 };
 	draws[0].flags         = HAS_NORMALS | HAS_COLORS;
 	draws[0].uv_transform  = { 1.0, 1.0, 0.0, 0.0 };
+	// The material the header describes - roughness 0.5, metalness 0,
+	// reflectance 0.5 - which is what the specular term is computed from and
+	// what every expectation below assumes.
+	draws[0].surface       = { 0.5, 0.0, 0.5, 0.0 };
 	// The morph loop's whole test: zero targets and zero weights mean the null
 	// pointers below it stay unread.
 	draws[0].morph_targets = 0;
