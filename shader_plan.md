@@ -685,6 +685,32 @@ macro. `Material.block` and the per-bucket table build follow it in Phase 11.
 **Done when**: `examples/*.js` that attach shader bodies run and report errors
 on the right line.
 
+## Pending design — modules instead of interfaces
+
+Settled on 2026-09-12, after the lighting files were rewritten twice in one
+sitting: **the intent is C3's shape, and the vocabulary is on hold.**
+
+- The user's words: *"rename it to `module lighting;` then, like C3 does, and not
+  `implements`. It's quite complicated to get right... let's think of a better
+  plan later."* Recorded rather than acted on: the three lighting files are green
+  and freshly rewritten, and a third rewrite on unsettled semantics is churn.
+- **The clarification that decides the shape**: C3's `module` is a *namespace*,
+  not an obligation. The obligation comes from a **declaration** - a module that
+  names `area_light_terms` with no definition in the module fails. Applied here
+  that is simpler than an interface: `lighting.shady` declares the two functions,
+  a provider file defines them, the def picks the provider, and `interface`,
+  `implements` and `provides` all disappear - because the declaration site is
+  "what it wants" and the definition site is "where it comes from", which is what
+  the user asked for in the first place.
+- **Open questions to settle before implementing**: whether imports are by module
+  name (`import lighting;`) rather than by path, and how a file's module name
+  relates to its filename (C3 decouples them; the engine's `ShaderFile` enum and
+  its disk-first loader do not, and the loader is also the list of what ships).
+  Diagnostics, `#line` region names and the cache identity all key off the
+  filename today, so decoupling has to answer for all three.
+- Until then today's spelling stays: `import "file.shady";`, `import { Name }
+  from "file.shady";`, `implements Name;` - landed in shady `ca526fd`.
+
 ## Phase 11 — Host integration
 
 **One pass at a time, with both implementations in one binary.** The engine has
