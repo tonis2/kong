@@ -1,12 +1,12 @@
 <*
  three.c3's generated mesh module, drawn as a colour pass.
 
- The ported vertex path is the thing under test. three.c3 swaps the material
- fragment stage for a stub when it writes this dump - `float4(input.uv,
- input.color.g, 1.0)` - which turns the attachment into the varyings themselves:
- red and green are the interpolated uv and blue is the instance's own tint, so
- what the checks below ask is whether the vertex stage reached the rasteriser
- with the values the streams hold.
+ The ported vertex path is the thing under test. three.c3 swaps the material's
+ *look* for a stub when it writes this dump - `shade` returns
+ `float3(s.uv, s.color.g)` - and the material half's own fragment stage turns
+ that into the attachment, so red and green are the interpolated uv and blue is
+ the instance's own tint. What the checks below ask is whether the vertex stage
+ reached the rasteriser with the values the streams hold.
 
  A cube is the whole geometry: one face turned to an orthographic camera, the
  other five edge-on and reaching no pixel. Its uvs run 0..1 across that face, so
@@ -111,16 +111,44 @@ struct DrawRecord
 
 $assert DrawRecord::size == 392 : "DrawRecord no longer matches three.c3's";
 
-// `MeshPush` (`gpu/pipeline.c3`): the frame, the instance array, and this
-// bucket's record. The whole of what a mesh draw pushes.
+// `Light` (`gpu/pipeline.c3`), which this rig needs one of only because the
+// fragment half reads `lights[0].meta.y` before it will answer a shadow. The
+// stride is its size.
+struct Light
+{
+	float[4] direction;
+	float[4] color;
+	float[4] area_right;
+	float[4] area_up;
+	uint[4] meta;
+}
+
+$assert Light::size == 80 : "Light no longer matches three.c3's";
+
+// `Uniforms`, the material's declared uniform block. This dump's material
+// declares none, so the generator emits the one reserved padding field and the
+// push block carries the struct - the same shape every material has.
+struct Uniforms
+{
+	float material_unused;
+}
+
+$assert Uniforms::size == 4 : "Uniforms no longer matches three.c3's";
+
+// `MeshPush` (`gpu/pipeline.c3`): the frame, the instance array, this bucket's
+// record, and the material's uniforms. The whole of what a mesh draw pushes.
 struct MeshPush
 {
 	FrameBlock* frame;
 	Instance* instances;
 	DrawRecord* draw;
+	Uniforms uniforms;
 }
 
-$assert MeshPush::size == 24 : "MeshPush no longer matches three.c3's";
+// 32 rather than 28: the shader's push block ends at the last field (24 + 4,
+// scalar layout), and C3 rounds the host mirror to its pointer alignment. The
+// extra bytes are tail padding the shader never reads.
+$assert MeshPush::size == 32 : "the mesh push block no longer matches the generated one";
 
 // `FrameBlock` (`gpu/pipeline.c3`), mirrored field for field like every other wire
 // struct here: the generated module's copy is walked from the C3 struct in
@@ -403,6 +431,7 @@ struct Rig
 	Memory colors;
 	Memory instances;
 	Memory draw_record;
+	Memory lights;
 	Memory frame;
 	Memory readback;
 }
@@ -413,6 +442,7 @@ fn void Rig.free(&self)
 {
 	self.readback.free();
 	self.frame.free();
+	self.lights.free();
 	self.draw_record.free();
 	self.instances.free();
 	self.colors.free();
@@ -481,8 +511,16 @@ fn void? rig_up(Rig* rig)
 	draws[0].morph_targets = 0;
 	rig.draw_record = compute_support::upload(&rig.f, &draws[0], DrawRecord::size)!;
 
+	// One light whose `meta.y` is 0xffffffff - "no shadow view" - so the
+	// fragment half's shadow lookup answers lit without dereferencing the null
+	// atlas pointer this rig leaves in the frame.
+	Light[1] lights = {};
+	lights[0].meta = { 0, 0xffffffff, 0, 0 };
+	rig.lights = compute_support::upload(&rig.f, &lights[0], Light::size)!;
+
 	FrameBlock[1] frame = {};
 	frame[0].view_projection = camera_projection();
+	frame[0].lights = (Light*)rig.lights.get_address();
 	rig.frame = compute_support::upload(&rig.f, &frame[0], FrameBlock::size)!;
 
 	rig.readback = vk::new_buffer(
@@ -505,7 +543,7 @@ fn MeshPush Rig.push(&self)
 
 // Draw the cube once and hand back the attachment's bytes. The clear is blue
 // and the fragment's blue is the tint, so the two cannot be confused.
-fn char[] Rig.render(&self, Pipeline pipeline, PipelineLayout layout)
+fn char[] Rig.render(&self, Pipeline pipeline, PipelineLayout layout, compute_support::MaterialSet* materials)
 {
 	MeshPush push = self.push();
 
@@ -523,6 +561,11 @@ fn char[] Rig.render(&self, Pipeline pipeline, PipelineLayout layout)
 	vk::beginCommandBuffer(self.f.cmd, &&vk::commandBufferBeginInfo())!!;
 	vk::cmdBeginRenderPass(self.f.cmd, &begin, SUBPASS_CONTENTS_INLINE);
 	vk::cmdBindPipeline(self.f.cmd, PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+	// Set 0 is the frame samplers the generated module declares whether or not
+	// this frame has a shadow pass; set 1 is the device-wide texture array the
+	// uv test makes the fragment stage sample.
+	DescriptorSet[2] sets = { materials.shadow_set, materials.texture_set };
+	vk::cmdBindDescriptorSets(self.f.cmd, PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 2, &sets[0], 0, null);
 	vk::cmdSetViewport(
 		self.f.cmd,
 		0,
@@ -711,7 +754,11 @@ fn void the_ported_vertex_path_draws_its_varyings() @test
 	rig_up(&rig)!!;
 	defer rig.free();
 
+	compute_support::MaterialSet materials = compute_support::material_set_up(&rig.f)!!;
+	defer materials.free();
+
 	PipelineLayout layout = vk::pipelineLayoutCreateInfo()
+		.setSetLayouts({ materials.shadow, materials.textures })
 		.setPushConstantRanges(
 			{ { .stageFlags = SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = (uint)MeshPush::size } }
 		)
@@ -723,7 +770,7 @@ fn void the_ported_vertex_path_draws_its_varyings() @test
 	Pipeline pipeline = mesh_pipeline_up(&rig.f, rig.colour.pass, layout, shader)!!;
 	defer vk::destroyPipeline(rig.f.device, pipeline, null);
 
-	char[] pixels = rig.render(pipeline, layout);
+	char[] pixels = rig.render(pipeline, layout, &materials);
 	defer free(pixels);
 	// Written before the checks, so a failure still leaves the frame to look at.
 	write_ppm("build/mesh.ppm", pixels);

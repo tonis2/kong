@@ -547,6 +547,10 @@ fn void? rig_up(Rig* rig)
 	rig.draw_record = compute_support::upload(&rig.f, &draws[0], DrawRecord::size)!;
 
 	Light[2] lights = {};
+	// 0xffffffff is the "no shadow view" index: without it the fragment half
+	// would follow `lights[0].meta.y` to a view that is not there.
+	lights[0].meta[1] = 0xffffffff;
+	lights[1].meta[1] = 0xffffffff;
 	rig.lights = compute_support::upload(&rig.f, &lights[0], (sz)lights.len * Light::size)!;
 
 	FrameBlock[1] frame = {};
@@ -666,7 +670,7 @@ fn ClusterPass? cluster_pass_up(Fixture* f)
 // the cluster dispatch runs in the same command buffer immediately before the
 // pass, because the fragment reads what it wrote through the frame block's
 // addresses: the barrier after it is what orders the two.
-fn char[] Rig.render(&self, Pipeline pipeline, PipelineLayout layout, ClusterPass* bin)
+fn char[] Rig.render(&self, Pipeline pipeline, PipelineLayout layout, ClusterPass* bin, compute_support::MaterialSet* materials)
 {
 	MeshPush push = self.push();
 
@@ -711,6 +715,10 @@ fn char[] Rig.render(&self, Pipeline pipeline, PipelineLayout layout, ClusterPas
 
 	vk::cmdBeginRenderPass(self.f.cmd, &begin, SUBPASS_CONTENTS_INLINE);
 	vk::cmdBindPipeline(self.f.cmd, PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+	// Set 0 is the frame samplers the generated module declares whether or not
+	// this frame has shadows; set 1 is the device-wide texture array.
+	DescriptorSet[2] sets = { materials.shadow_set, materials.texture_set };
+	vk::cmdBindDescriptorSets(self.f.cmd, PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 2, &sets[0], 0, null);
 	// Negative height, the engine's own flip: clip-space +Y lands at the top of
 	// the framebuffer, which is the way the culling pass's cells are computed.
 	vk::cmdSetViewport(
@@ -905,9 +913,13 @@ fn void a_directional_light_lights_only_the_face_it_faces() @test
 	rig_up(&rig)!!;
 	defer rig.free();
 
+	compute_support::MaterialSet materials = compute_support::material_set_up(&rig.f)!!;
+	defer materials.free();
+
 	// Both stages: the vertex stage reads the push block's pointers and the
 	// fragment stage reads `push.frame`.
 	PipelineLayout layout = vk::pipelineLayoutCreateInfo()
+		.setSetLayouts({ materials.shadow, materials.textures })
 		.setPushConstantRanges(
 			{
 				{
@@ -931,12 +943,13 @@ fn void a_directional_light_lights_only_the_face_it_faces() @test
 	Light[2] lights = {};
 	lights[0].direction = { 0.0, 0.0, 1.0, 0.0 };
 	lights[0].color = { 1.0, 0.5, 0.0, 1.0 };
+	lights[0].meta[1] = 0xffffffff;
 	rig.set_lights(lights[..]);
 	// No punctual light is present, so the cluster list - zeroed - is never the
 	// reason for anything below.
 	rig.set_frame(light_count: 1.0, capacity: CLUSTER_CAPACITY, near_plane: 0.5, far_plane: 4.0);
 
-	char[] lit = rig.render(pipeline, layout, null);
+	char[] lit = rig.render(pipeline, layout, null, &materials);
 	defer free(lit);
 	// Written before the checks, so a failure still leaves the frame to look at.
 	write_ppm("build/mesh_lit_directional.ppm", lit);
@@ -967,7 +980,7 @@ fn void a_directional_light_lights_only_the_face_it_faces() @test
 	// ran and added nothing.
 	lights[0].direction = { 0.0, 0.0, -1.0, 0.0 };
 	rig.set_lights(lights[..]);
-	char[] away = rig.render(pipeline, layout, null);
+	char[] away = rig.render(pipeline, layout, null, &materials);
 	defer free(away);
 	write_ppm("build/mesh_lit_directional_away.ppm", away);
 
@@ -1003,7 +1016,11 @@ fn void a_point_light_reaches_a_fragment_through_its_cluster() @test
 	rig_up(&rig)!!;
 	defer rig.free();
 
+	compute_support::MaterialSet materials = compute_support::material_set_up(&rig.f)!!;
+	defer materials.free();
+
 	PipelineLayout layout = vk::pipelineLayoutCreateInfo()
+		.setSetLayouts({ materials.shadow, materials.textures })
 		.setPushConstantRanges(
 			{
 				{
@@ -1026,11 +1043,12 @@ fn void a_point_light_reaches_a_fragment_through_its_cluster() @test
 
 	// Light 1 is the point light: xyz is its world position, w its range. The
 	// culling pass starts its loop at 1, so light 0 stays the slot the engine's
-	// own list leaves for the sun.
+	// own list leaves for the sun - with no view, which is what 0xffffffff says.
 	Light[2] lights = {};
+	lights[0].meta[1] = 0xffffffff;
 	lights[1].direction = { 0.0, 0.0, 1.8, 1.1 };
 	lights[1].color = { 0.0, 1.0, 0.5, 1.0 };
-	lights[1].meta = { 0, 0, LIGHT_POINT, 0 };
+	lights[1].meta = { 0, 0xffffffff, LIGHT_POINT, 0 };
 	rig.set_lights(lights[..]);
 
 	// The face is at distance 1.0 and the near plane at 1.2, so the fragment's
@@ -1043,7 +1061,7 @@ fn void a_point_light_reaches_a_fragment_through_its_cluster() @test
 		.layout   = cluster.layout,
 		.push     = rig.cluster_push(1.2, 4.0),
 	};
-	char[] lit = rig.render(pipeline, layout, &bin);
+	char[] lit = rig.render(pipeline, layout, &bin, &materials);
 	defer free(lit);
 	write_ppm("build/mesh_lit_point.ppm", lit);
 
@@ -1090,7 +1108,7 @@ fn void a_point_light_reaches_a_fragment_through_its_cluster() @test
 		.layout   = cluster.layout,
 		.push     = rig.cluster_push(1.2, 4.0),
 	};
-	char[] dark = rig.render(pipeline, layout, &moved);
+	char[] dark = rig.render(pipeline, layout, &moved, &materials);
 	defer free(dark);
 	write_ppm("build/mesh_lit_point_moved.ppm", dark);
 
@@ -1124,7 +1142,11 @@ fn void a_frame_with_no_cluster_grid_shades_the_whole_light_list() @test
 	rig_up(&rig)!!;
 	defer rig.free();
 
+	compute_support::MaterialSet materials = compute_support::material_set_up(&rig.f)!!;
+	defer materials.free();
+
 	PipelineLayout layout = vk::pipelineLayoutCreateInfo()
+		.setSetLayouts({ materials.shadow, materials.textures })
 		.setPushConstantRanges(
 			{
 				{
@@ -1143,16 +1165,17 @@ fn void a_frame_with_no_cluster_grid_shades_the_whole_light_list() @test
 	defer vk::destroyPipeline(rig.f.device, pipeline, null);
 
 	Light[2] lights = {};
+	lights[0].meta[1] = 0xffffffff;
 	lights[1].direction = { 0.0, 0.0, 1.8, 1.1 };
 	lights[1].color = { 0.0, 1.0, 0.5, 1.0 };
-	lights[1].meta = { 0, 0, LIGHT_POINT, 0 };
+	lights[1].meta = { 0, 0xffffffff, LIGHT_POINT, 0 };
 	rig.set_lights(lights[..]);
 
 	// The grid's capacity is zero, which is the flag, and the cluster buffers
 	// stay as the rig left them - zeroed - because nothing dispatches.
 	rig.set_frame(light_count: 2.0, capacity: 0, near_plane: 1.2, far_plane: 4.0);
 
-	char[] lit = rig.render(pipeline, layout, null);
+	char[] lit = rig.render(pipeline, layout, null, &materials);
 	defer free(lit);
 	write_ppm("build/mesh_lit_overflow.ppm", lit);
 
